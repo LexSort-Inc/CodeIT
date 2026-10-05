@@ -1,9 +1,10 @@
 import { useState } from 'react';
 
-export default function TerminalPane() {
+export default function TerminalPane({ cwd }) {
   const [cmd, setCmd] = useState('ollama list');
-  const [log, setLog] = useState(['CodeIT runner — approval: every command runs only when you press Run. cd = workspace root.']);
+  const [log, setLog] = useState(['CodeIT runner — approval: every command runs only when you press Run. cwd = active project.']);
   const [busy, setBusy] = useState(false);
+  const cwdShown = cwd || '';
 
   async function run() {
     if (!window.codeit || busy || !cmd.trim()) return;

@@ -16,7 +16,7 @@ function Tree({ nodes, onOpen, depth = 0 }) {
   );
 }
 
-export default function FileExplorer({ onOpenFile, root, setRoot }) {
+export default function FileExplorer({ onOpenFile, root, setRoot, refreshKey, activePath }) {
   const [tree, setTree] = useState([]);
   async function refresh() {
     if (!window.codeit) return;
@@ -24,7 +24,7 @@ export default function FileExplorer({ onOpenFile, root, setRoot }) {
     setRoot(res.root);
     setTree(res.tree || []);
   }
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refreshKey, activePath]);
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 8 }}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>

@@ -5,7 +5,8 @@ Electron main (electron/main.js)
   BrowserWindow + webviewTag + preload bridge
   IPC: workspace:open/root, fs:list/read/write, exec:run, llm:ping
 Renderer (Vite + React, src/)
-  ChatPane      — streams via src/llm/router.js (Ollama OpenAI-compat SSE)
+  ProjectsPane    — +Folder (dialog) / +GitHub (gh repo list + OWNER/REPO clone to ~/CodeIT-projects)
+  ChatPane        — per-project history (userData chats), project notes + pinned file auto-context
   Settings      — provider/model picker + free-key inputs (localStorage only)
   FileExplorer  — fs:list (depth 3, skips dotfiles/node_modules)
   EditorPane    — fs:read/write, +File to chat (12k char cap for small models)

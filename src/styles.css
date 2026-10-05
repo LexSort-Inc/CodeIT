@@ -4,7 +4,9 @@ body { margin: 0; background: #0d1117; color: #e6edf3; font-family: -apple-syste
 .app { height: 100vh; display: flex; flex-direction: column; }
 .topbar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #30363d; }
 .muted { opacity: 0.6; font-size: 13px; }
-.grid { flex: 1; display: grid; grid-template-columns: 1.1fr 1fr 1fr; min-height: 0; }
+.grid-projects { flex: 1; display: grid; grid-template-columns: 240px 1.1fr 1fr 1fr; min-height: 0; }
+.pane.rail { background: #010409; }
+.pane-body.files { flex: 1; }
 .pane { border-right: 1px solid #30363d; display: flex; flex-direction: column; min-height: 0; }
 .pane:last-child { border-right: 0; }
 .pane-title { padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.8; border-bottom: 1px solid #30363d; }

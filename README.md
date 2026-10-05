@@ -33,7 +33,16 @@ npm run dist:win   # outputs release/CodeIT-0.1.0-setup.exe
 
 See `docs/WINDOWS-BUILD.md`.
 
-## Architecture
+## Projects — many repos, clean org
+
+Left rail holds **projects**: add any local folder (`+ Folder`) or clone a GitHub repo (`+ GitHub`, lists your `gh` repos or paste `OWNER/REPO`, clones to `~/CodeIT-projects`). Switching projects switches files, terminal cwd, git branch badge, and chat history.
+
+Per-project context (auto-attached to every chat in that project):
+- **Pinned files** — Pin button in editor, shown as 📌 chips
+- **Notes tab** — stack/conventions/goals, saved to `.codeit/CONTEXT.md` inside the project so it travels with the repo
+- **Chat history** — stored per project (`userData/CodeIT/chats/<id>.json`), Clear button resets
+
+Topbar shows `branch` + dirty count (`●n`) for git repos, Reveal opens Finder/Explorer.
 
 ```
 electron/main.js      — BrowserWindow, IPC: fs list/read/write, exec cmd, LLM passthrough

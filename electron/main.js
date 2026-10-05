@@ -1,16 +1,62 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs/promises');
-const { exec } = require('child_process');
+const fsSync = require('fs');
+const { exec, execFile } = require('child_process');
 
 const isDev = !app.isPackaged;
 let mainWindow;
-let workspaceRoot = require('os').homedir();
+let workspaceRoot = os.homedir();
+
+// ---------- Projects store (organized multi-project workflow) ----------
+// projects.json in userData: { activeId, projects: [{id,name,kind,path,repo,url,branch,pinned,createdAt,lastOpened}] }
+// Per-project chat history: userData/chats/<id>.json
+// Per-project notes: <project>/.codeit/CONTEXT.md (stays with the repo/folder)
+function storeDir() {
+  return path.join(app.getPath('userData'), 'CodeIT');
+}
+function projectsFile() {
+  return path.join(storeDir(), 'projects.json');
+}
+function chatsDir() {
+  return path.join(storeDir(), 'chats');
+}
+async function ensureStore() {
+  await fs.mkdir(storeDir(), { recursive: true });
+  await fs.mkdir(chatsDir(), { recursive: true });
+  try {
+    await fs.access(projectsFile());
+  } catch {
+    await fs.writeFile(projectsFile(), JSON.stringify({ activeId: null, projects: [] }, null, 2));
+  }
+}
+async function loadProjects() {
+  await ensureStore();
+  try {
+    const raw = await fs.readFile(projectsFile(), 'utf8');
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.projects)) data.projects = [];
+    return data;
+  } catch {
+    return { activeId: null, projects: [] };
+  }
+}
+async function saveProjects(data) {
+  await ensureStore();
+  await fs.writeFile(projectsFile(), JSON.stringify(data, null, 2));
+}
+function newId() {
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+function deriveName(p) {
+  return path.basename(p).replace(/[-_]+/g, ' ').trim() || p;
+}
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: 1560,
+    height: 950,
     title: 'CodeIT',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -32,6 +78,13 @@ async function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  // restore last active project as workspace root
+  try {
+    const data = await loadProjects();
+    const active = data.projects.find((p) => p.id === data.activeId);
+    if (active && fsSync.existsSync(active.path)) workspaceRoot = active.path;
+  } catch { /* first run */ }
 }
 
 app.whenReady().then(createWindow);
@@ -42,7 +95,7 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-// ---------- IPC: workspace fs ----------
+// ---------- IPC: single workspace fs (now follows active project) ----------
 ipcMain.handle('workspace:open', async () => {
   const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (!res.canceled && res.filePaths[0]) workspaceRoot = res.filePaths[0];
@@ -80,12 +133,12 @@ ipcMain.handle('fs:read', async (_e, filePath) => {
 });
 
 ipcMain.handle('fs:write', async (_e, filePath, content) => {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, 'utf8');
   return true;
 });
 
 // ---------- IPC: command runner (no native node-pty in v0.1; child_process, cross-platform) ----------
-// v0.2 upgrade path: node-pty + xterm.js for full interactive PTY (needed for ThinkCenter parity test).
 ipcMain.handle('exec:run', async (_e, cmd) => {
   return new Promise((resolve) => {
     exec(cmd, { cwd: workspaceRoot, timeout: 60000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
@@ -94,9 +147,7 @@ ipcMain.handle('exec:run', async (_e, cmd) => {
   });
 });
 
-// ---------- IPC: LLM passthrough (keeps renderer free of CORS/keychain issues) ----------
-// Simple non-streaming relay. Streaming happens renderer-side for Ollama browser fetch;
-// main-process relay used when keys must stay out of renderer or for Windows parity.
+// ---------- IPC: LLM passthrough ----------
 ipcMain.handle('llm:ping', async (_e, host) => {
   try {
     const r = await fetch(`${host || 'http://127.0.0.1:11434'}/api/tags`);
@@ -104,4 +155,159 @@ ipcMain.handle('llm:ping', async (_e, host) => {
   } catch (err) {
     return { ok: false, error: String(err) };
   }
+});
+
+// ---------- IPC: projects ----------
+ipcMain.handle('projects:list', async () => {
+  const data = await loadProjects();
+  return data;
+});
+
+ipcMain.handle('projects:add-local', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+  if (res.canceled || !res.filePaths[0]) return null;
+  const dir = res.filePaths[0];
+  const data = await loadProjects();
+  const existing = data.projects.find((p) => p.path === dir);
+  if (existing) {
+    data.activeId = existing.id;
+    existing.lastOpened = new Date().toISOString();
+    workspaceRoot = dir;
+    await saveProjects(data);
+    return { data, project: existing };
+  }
+  const project = { id: newId(), name: deriveName(dir), kind: 'local', path: dir, repo: null, url: null, pinned: [], createdAt: new Date().toISOString(), lastOpened: new Date().toISOString() };
+  data.projects.unshift(project);
+  data.activeId = project.id;
+  workspaceRoot = dir;
+  await saveProjects(data);
+  return { data, project };
+});
+
+ipcMain.handle('projects:activate', async (_e, id) => {
+  const data = await loadProjects();
+  const p = data.projects.find((x) => x.id === id);
+  if (!p) return null;
+  data.activeId = id;
+  p.lastOpened = new Date().toISOString();
+  if (fsSync.existsSync(p.path)) workspaceRoot = p.path;
+  await saveProjects(data);
+  return { data, project: p, root: workspaceRoot };
+});
+
+ipcMain.handle('projects:remove', async (_e, id) => {
+  const data = await loadProjects();
+  data.projects = data.projects.filter((x) => x.id !== id);
+  if (data.activeId === id) data.activeId = data.projects[0]?.id ?? null;
+  await saveProjects(data);
+  try { await fs.unlink(path.join(chatsDir(), `${id}.json`)); } catch { /* no chat yet */ }
+  return data;
+});
+
+ipcMain.handle('projects:rename', async (_e, id, name) => {
+  const data = await loadProjects();
+  const p = data.projects.find((x) => x.id === id);
+  if (p && name.trim()) p.name = name.trim();
+  await saveProjects(data);
+  return data;
+});
+
+ipcMain.handle('projects:pin', async (_e, id, filePath) => {
+  const data = await loadProjects();
+  const p = data.projects.find((x) => x.id === id);
+  if (!p) return data;
+  p.pinned = p.pinned || [];
+  if (!p.pinned.includes(filePath)) p.pinned.push(filePath);
+  await saveProjects(data);
+  return data;
+});
+
+ipcMain.handle('projects:unpin', async (_e, id, filePath) => {
+  const data = await loadProjects();
+  const p = data.projects.find((x) => x.id === id);
+  if (p) p.pinned = (p.pinned || []).filter((x) => x !== filePath);
+  await saveProjects(data);
+  return data;
+});
+
+ipcMain.handle('projects:reveal', async (_e, targetPath) => {
+  shell.showItemInFolder(targetPath || workspaceRoot);
+  return true;
+});
+
+// Per-project chat history (survives folder moves; stored in userData)
+ipcMain.handle('projects:get-chat', async (_e, id) => {
+  try {
+    const raw = await fs.readFile(path.join(chatsDir(), `${id}.json`), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+});
+ipcMain.handle('projects:save-chat', async (_e, id, msgs) => {
+  await ensureStore();
+  await fs.writeFile(path.join(chatsDir(), `${id}.json`), JSON.stringify((msgs || []).slice(-100), null, 2));
+  return true;
+});
+
+// ---------- IPC: git info for active project ----------
+function sh(cmd, cwd) {
+  return new Promise((resolve) => {
+    exec(cmd, { cwd, timeout: 15000 }, (error, stdout) => {
+      resolve(error ? '' : String(stdout).trim());
+    });
+  });
+}
+ipcMain.handle('git:info', async () => {
+  const branch = await sh('git branch --show-current', workspaceRoot);
+  const status = await sh('git status --porcelain', workspaceRoot);
+  const remote = await sh('git remote get-url origin', workspaceRoot);
+  return { branch, dirty: status ? status.split('\n').length : 0, remote, isRepo: Boolean(branch || remote) };
+});
+
+// ---------- IPC: GitHub via gh CLI (already authed on this machine) ----------
+function runBin(bin, args, cwd) {
+  return new Promise((resolve) => {
+    execFile(bin, args, { cwd: cwd || os.homedir(), timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) resolve({ ok: false, error: String(stderr || error.message).slice(0, 2000) });
+      else resolve({ ok: true, out: String(stdout) });
+    });
+  });
+}
+ipcMain.handle('github:repos', async (_e, limit) => {
+  const r = await runBin('gh', ['repo', 'list', '--limit', String(limit || 50), '--json', 'nameWithOwner,url,isPrivate,updatedAt']);
+  if (!r.ok) return { ok: false, error: r.error, repos: [] };
+  try {
+    return { ok: true, repos: JSON.parse(r.out) };
+  } catch (err) {
+    return { ok: false, error: String(err), repos: [] };
+  }
+});
+ipcMain.handle('github:auth', async () => {
+  const r = await runBin('gh', ['auth', 'status']);
+  return { ok: r.ok, out: (r.out || r.error || '').slice(0, 1000) };
+});
+ipcMain.handle('projects:clone', async (_e, repoFullName, parentDir) => {
+  const clean = String(repoFullName || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) return { ok: false, error: 'Use OWNER/REPO format, e.g. LexSort-Inc/CodeIT' };
+  let base = parentDir;
+  if (!base) {
+    base = path.join(os.homedir(), 'CodeIT-projects');
+    await fs.mkdir(base, { recursive: true });
+  }
+  const dest = path.join(base, clean.split('/')[1]);
+  if (fsSync.existsSync(dest)) return { ok: false, error: `Folder already exists: ${dest}` };
+  // Prefer gh (handles auth) then fall back to git https
+  let r = await runBin('gh', ['repo', 'clone', clean, dest]);
+  if (!r.ok) {
+    r = await runBin('git', ['clone', `https://github.com/${clean}.git`, dest]);
+    if (!r.ok) return { ok: false, error: r.error };
+  }
+  const data = await loadProjects();
+  const project = { id: newId(), name: clean.split('/')[1], kind: 'github', path: dest, repo: clean, url: `https://github.com/${clean}`, pinned: [], createdAt: new Date().toISOString(), lastOpened: new Date().toISOString() };
+  data.projects.unshift(project);
+  data.activeId = project.id;
+  workspaceRoot = dest;
+  await saveProjects(data);
+  return { ok: true, data, project };
 });
