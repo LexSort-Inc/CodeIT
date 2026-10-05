@@ -75,7 +75,7 @@ export default function ProjectsPane({ activeId, onSelect, refreshKey }) {
               <button onClick={() => setRepoInput(r.nameWithOwner)}>Use</button>
             </div>
           ))}
-          <input value={repoInput} onChange={(e) => setRepoInput(e.target.value)} placeholder="OWNER/REPO e.g. LexSort-Inc/CodeIT" />
+          <input value={repoInput} onChange={(e) => setRepoInput(e.target.value)} placeholder="OWNER/REPO e.g. owner/repo" />
           <div style={{ display: 'flex', gap: 6 }}>
             <button onClick={clone} disabled={busy} style={{ flex: 1 }}>{busy ? 'Cloning…' : 'Clone & open'}</button>
             <button onClick={() => setShowClone(false)}>Close</button>

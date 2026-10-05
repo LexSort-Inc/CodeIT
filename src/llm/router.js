@@ -96,7 +96,7 @@ export async function streamChat({ provider, model, messages, onChunk }) {
 
   const headers = { 'Content-Type': 'application/json' };
   if (provider === 'groq' || provider === 'deepseek') headers.Authorization = `Bearer ${key}`;
-  if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://github.com/LexSort-Inc/CodeIT'; }
+  if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://codeit.app'; }
 
   const res = await fetch(conf.url, { method: 'POST', headers, body: JSON.stringify(conf.map(messages)) });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -142,7 +142,7 @@ async function openAiPost({ provider, model, key, body }) {
   };
   const headers = { 'Content-Type': 'application/json' };
   if (provider !== 'ollama') headers.Authorization = `Bearer ${key}`;
-  if (provider === 'openrouter') headers['HTTP-Referer'] = 'https://github.com/LexSort-Inc/CodeIT';
+  if (provider === 'openrouter') headers['HTTP-Referer'] = 'https://codeit.app';
   const res = await fetch(urls[provider], { method: 'POST', headers, body: JSON.stringify({ model, ...body }) });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   return res;

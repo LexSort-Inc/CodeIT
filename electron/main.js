@@ -277,13 +277,30 @@ function runBin(bin, args, cwd) {
   });
 }
 ipcMain.handle('github:repos', async (_e, limit) => {
-  const r = await runBin('gh', ['repo', 'list', '--limit', String(limit || 50), '--json', 'nameWithOwner,url,isPrivate,updatedAt']);
-  if (!r.ok) return { ok: false, error: r.error, repos: [] };
-  try {
-    return { ok: true, repos: JSON.parse(r.out) };
-  } catch (err) {
-    return { ok: false, error: String(err), repos: [] };
+  const max = Number(limit) || 50;
+  const perOwner = String(Math.min(Math.max(max, 10), 100));
+  const fields = 'nameWithOwner,url,isPrivate,updatedAt';
+  const all = [];
+  const seen = new Set();
+  const push = (arr) => {
+    for (const r of Array.isArray(arr) ? arr : []) {
+      if (r && r.nameWithOwner && !seen.has(r.nameWithOwner)) { seen.add(r.nameWithOwner); all.push(r); }
+    }
+  };
+  const personal = await runBin('gh', ['repo', 'list', '--limit', perOwner, '--json', fields]);
+  if (!personal.ok) return { ok: false, error: personal.error, repos: [] };
+  try { push(JSON.parse(personal.out)); } catch (err) { return { ok: false, error: String(err), repos: [] }; }
+  const orgs = await runBin('gh', ['api', 'user/orgs', '--paginate', '-q', '.[].login']);
+  if (orgs.ok) {
+    const logins = String(orgs.out || '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+    for (const org of [...new Set(logins)].slice(0, 20)) {
+      const r = await runBin('gh', ['repo', 'list', org, '--limit', perOwner, '--json', fields]);
+      if (!r.ok) continue;
+      try { push(JSON.parse(r.out)); } catch { /* skip bad owner payload */ }
+    }
   }
+  all.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return { ok: true, repos: all.slice(0, max) };
 });
 ipcMain.handle('github:auth', async () => {
   const r = await runBin('gh', ['auth', 'status']);
@@ -291,7 +308,7 @@ ipcMain.handle('github:auth', async () => {
 });
 ipcMain.handle('projects:clone', async (_e, repoFullName, parentDir) => {
   const clean = String(repoFullName || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
-  if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) return { ok: false, error: 'Use OWNER/REPO format, e.g. LexSort-Inc/CodeIT' };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) return { ok: false, error: 'Use OWNER/REPO format, e.g. owner/repo' };
   let base = parentDir;
   if (!base) {
     base = path.join(os.homedir(), 'CodeIT-projects');
