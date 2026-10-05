@@ -22,5 +22,15 @@ contextBridge.exposeInMainWorld('codeit', {
   projectsClone: (repo, parentDir) => ipcRenderer.invoke('projects:clone', repo, parentDir),
   gitInfo: () => ipcRenderer.invoke('git:info'),
   githubRepos: (limit) => ipcRenderer.invoke('github:repos', limit),
-  githubAuth: () => ipcRenderer.invoke('github:auth')
+  githubAuth: () => ipcRenderer.invoke('github:auth'),
+  // secrets (OS keychain) — never localStorage
+  keysGet: () => ipcRenderer.invoke('keys:get'),
+  keysSet: (name, value) => ipcRenderer.invoke('keys:set', name, value),
+  // curated tools: catalog, enablement, MCP calls, skills
+  toolsCatalog: () => ipcRenderer.invoke('tools:catalog'),
+  toolsSetEnabled: (id, enabled, scope) => ipcRenderer.invoke('tools:set-enabled', id, enabled, scope),
+  toolsAlwaysAllow: (toolKey) => ipcRenderer.invoke('tools:always-allow', toolKey),
+  toolsCall: (serverId, tool, args, approved) => ipcRenderer.invoke('tools:call', serverId, tool, args, approved),
+  toolsServerTools: (serverId) => ipcRenderer.invoke('tools:server-tools', serverId),
+  skillsList: () => ipcRenderer.invoke('skills:list')
 });

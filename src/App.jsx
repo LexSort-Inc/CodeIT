@@ -5,6 +5,7 @@ import TerminalPane from './components/TerminalPane.jsx';
 import WebviewDock from './components/WebviewDock.jsx';
 import Settings from './components/Settings.jsx';
 import ProjectsPane from './components/ProjectsPane.jsx';
+import ExtensionsPane from './components/ExtensionsPane.jsx';
 import './styles.css';
 
 export default function App() {
@@ -19,6 +20,8 @@ export default function App() {
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [railTab, setRailTab] = useState('projects'); // projects | extensions
+  const [toolCount, setToolCount] = useState(0);
   const editorOpenRef = useRef(null);
 
   const active = projects.find((p) => p.id === activeId) || null;
@@ -94,16 +97,23 @@ export default function App() {
             <button onClick={removeProject} title="Remove from list (keeps files)">✕</button>
           </span>
         )}
-        <Settings provider={provider} setProvider={setProvider} model={model} setModel={setModel} />
+        <Settings provider={provider} setProvider={setProvider} model={model} setModel={setModel} toolCount={toolCount} />
       </header>
       <div className="grid-projects">
         <section className="pane rail">
-          <div className="pane-title">Projects ({projects.length})</div>
-          <div className="pane-body"><ProjectsPane activeId={activeId} onSelect={selectProject} refreshKey={refreshKey} /></div>
+          <div className="pane-title tabs">
+            <button onClick={() => setRailTab('projects')} className={railTab === 'projects' ? 'active' : ''}>Projects ({projects.length})</button>
+            <button onClick={() => setRailTab('extensions')} className={railTab === 'extensions' ? 'active' : ''}>Extensions</button>
+          </div>
+          <div className="pane-body">
+            {railTab === 'projects'
+              ? <ProjectsPane activeId={activeId} onSelect={selectProject} refreshKey={refreshKey} />
+              : <ExtensionsPane project={active} />}
+          </div>
         </section>
         <section className="pane">
           <div className="pane-title">Chat — {provider}/{model} {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
-          <div className="pane-body"><ChatPane provider={provider} model={model} fileContext={fileContext} project={active} projectNotes={notes} /></div>
+          <div className="pane-body"><ChatPane provider={provider} model={model} fileContext={fileContext} project={active} projectNotes={notes} onToolCount={setToolCount} /></div>
         </section>
         <section className="pane">
           <div className="pane-title">Files {root ? `· ${root}` : ''}</div>

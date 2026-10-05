@@ -15,7 +15,21 @@ Renderer (Vite + React, src/)
 ```
 
 Router fallback chain: `ollama (qwen2.5-coder:7b default) -> gemini-2.0-flash -> groq llama-3.3-70b -> openrouter :free`.
-Keys never leave machine. `.env` + localStorage only, `.gitignore` covers both.
+Keys in OS keychain via `keys:*` IPC (safeStorage); legacy localStorage keys migrate once, then cleared.
 
-Borrowed patterns (not vendored code): AnythingLLM provider map, Jan engine URL config,
-Goose headless `goose run` (future agent), Open Interpreter y/n/e approval (mirrored in TerminalPane).
+## Extensions (v0.2): skills + MCP tools
+
+```
+electron/catalog.js   — curated catalog (5 MCP + 4 skills) with localReady/cloudPreferred/needsKey/risk badges
+electron/mcp.js       — MCP stdio client: spawn, initialize, tools/list, tools/call, kill on quit
+electron/main.js      — tools:catalog/set-enabled/call/server-tools, skills:list, keys:get/set IPC
+src/projects/context.js — skill keyword matching + system prompt builder (notes+pins+skills)
+src/llm/router.js     — chatWithTools(): Ollama native /api/chat rounds (structured calls),
+                        OpenAI-shape rounds for groq/deepseek/openrouter, streaming final answer.
+                        Verified local tool-callers: qwen3:8b, mistral:7b. qwen2.5-coder:7b
+                        emits pseudo-calls — warned, allowed, cloud suggested.
+src/components/ExtensionsPane.jsx — curated store, per-project toggles
+src/components/ToolApproval.jsx    — Allow once / Always / Deny gate (writes always prompt)
+.agents/skills/*      — bundled skills (commit-helper, test-runner, project-notes, code-review)
+AGENTS.md             — always-loaded repo instructions
+```

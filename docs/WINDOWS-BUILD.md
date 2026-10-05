@@ -17,6 +17,12 @@ npm run dist:win
 
 Requirements on ThinkCenter: Node 20+, Ollama for Windows, WebView2 (ships with Win11).
 
+> Ollama headless note: the tray app can fail with "Unable to init instance" on
+> AMD-iGPU boxes. Run the server directly instead — it works fine:
+> `powershell -NoProfile -Command "Start-Process -FilePath ollama -ArgumentList 'serve' -WindowStyle Hidden"`
+> If the iGPU still interferes: `setx OLLAMA_LLM_LIBRARY cpu`, then start serve.
+> Models live in `%USERPROFILE%\.ollama` and survive reboots; just re-run serve.
+
 ## Option B — trigger from Mac over Tailscale (SSH)
 
 ```bash

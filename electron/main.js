@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const { exec, execFile } = require('child_process');
+const { CATALOG } = require('./catalog');
+const mcp = require('./mcp');
 
 const isDev = !app.isPackaged;
 let mainWindow;
@@ -311,3 +313,157 @@ ipcMain.handle('projects:clone', async (_e, repoFullName, parentDir) => {
   await saveProjects(data);
   return { ok: true, data, project };
 });
+
+// ---------- IPC: secrets via safeStorage (OS keychain; never localStorage) ----------
+function keysFile() {
+  return path.join(storeDir(), 'keys.json');
+}
+async function readKeys() {
+  try {
+    const raw = await fs.readFile(keysFile(), 'utf8');
+    const stored = JSON.parse(raw);
+    const out = {};
+    for (const [k, v] of Object.entries(stored)) {
+      if (v && v.encrypted && safeStorage.isEncryptionAvailable()) {
+        try { out[k] = safeStorage.decryptString(Buffer.from(v.data, 'base64')); } catch { out[k] = ''; }
+      } else out[k] = v && v.data ? v.data : '';
+    }
+    return out;
+  } catch { return {}; }
+}
+ipcMain.handle('keys:get', async () => readKeys());
+ipcMain.handle('keys:set', async (_e, name, value) => {
+  await ensureStore();
+  let stored = {};
+  try { stored = JSON.parse(await fs.readFile(keysFile(), 'utf8')); } catch {}
+  if (value) {
+    stored[name] = safeStorage.isEncryptionAvailable()
+      ? { encrypted: true, data: safeStorage.encryptString(String(value)).toString('base64') }
+      : { encrypted: false, data: String(value) };
+  } else delete stored[name];
+  await fs.writeFile(keysFile(), JSON.stringify(stored, null, 2));
+  // migrate legacy renderer localStorage keys on next load (renderer clears them after)
+  return { ok: true, encrypted: safeStorage.isEncryptionAvailable() };
+});
+
+// ---------- IPC: tools registry (curated catalog + per-project enablement) ----------
+function toolsFile() {
+  return path.join(storeDir(), 'tools.json');
+}
+async function loadToolState() {
+  try {
+    return JSON.parse(await fs.readFile(toolsFile(), 'utf8'));
+  } catch {
+    // defaults: skills on, safe MCP on, key-gated MCP off until key present
+    return { enabled: { 'skill:commit-helper': true, 'skill:test-runner': true, 'skill:project-notes': true, 'skill:code-review': true, 'mcp:memory': true, 'mcp:sequentialthinking': true, 'mcp:context7': true }, alwaysAllow: [], projectOverrides: {} };
+  }
+}
+async function saveToolState(s) {
+  await ensureStore();
+  await fs.writeFile(toolsFile(), JSON.stringify(s, null, 2));
+}
+function projectToolEnabled(state, projectId, toolId) {
+  const over = projectId && state.projectOverrides && state.projectOverrides[projectId];
+  if (over && toolId in over) return over[toolId];
+  return state.enabled[toolId] === true;
+}
+ipcMain.handle('tools:catalog', async () => {
+  const state = await loadToolState();
+  const data = await loadProjects();
+  const activeId = data.activeId;
+  return CATALOG.map((c) => ({ ...c, enabled: projectToolEnabled(state, activeId, c.id) }));
+});
+ipcMain.handle('tools:set-enabled', async (_e, toolId, enabled, scope) => {
+  const state = await loadToolState();
+  if (scope && scope !== 'global') {
+    state.projectOverrides[scope] = state.projectOverrides[scope] || {};
+    state.projectOverrides[scope][toolId] = enabled;
+  } else state.enabled[toolId] = enabled;
+  await saveToolState(state);
+  return { ok: true };
+});
+ipcMain.handle('tools:always-allow', async (_e, toolKey) => {
+  const state = await loadToolState();
+  if (!state.alwaysAllow.includes(toolKey)) state.alwaysAllow.push(toolKey);
+  await saveToolState(state);
+  return { ok: true };
+});
+
+// ---------- IPC: skills (markdown loader — project, repo, global) ----------
+function parseSkillFrontmatter(text) {
+  const m = String(text).match(/^---\n([\s\S]*?)\n---/);
+  const out = { name: '', description: '' };
+  if (!m) return out;
+  for (const line of m[1].split('\n')) {
+    const i = line.indexOf(':');
+    if (i < 0) continue;
+    const k = line.slice(0, i).trim();
+    const v = line.slice(i + 1).trim();
+    if (k === 'name' || k === 'description') out[k] = v;
+  }
+  return out;
+}
+async function readSkillsFrom(dir) {
+  const found = [];
+  let entries = [];
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return found; }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const fp = path.join(dir, e.name, 'SKILL.md');
+    try {
+      const text = await fs.readFile(fp, 'utf8');
+      const fm = parseSkillFrontmatter(text);
+      if (fm.name) found.push({ id: `skill:${fm.name}`, name: fm.name, description: fm.description, body: text.slice(0, 6000), source: dir });
+    } catch {}
+  }
+  return found;
+}
+ipcMain.handle('skills:list', async () => {
+  const skills = [];
+  // 1. active project .codeit/skills (user's own, travels with repo)
+  if (workspaceRoot) skills.push(...await readSkillsFrom(path.join(workspaceRoot, '.codeit', 'skills')));
+  // 2. CodeIT repo bundled skills (dev of CodeIT itself)
+  skills.push(...await readSkillsFrom(path.join(__dirname, '..', '.agents', 'skills')));
+  // 3. global user skills
+  skills.push(...await readSkillsFrom(path.join(os.homedir(), '.codeit', 'skills')));
+  const seen = new Set();
+  return skills.filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
+});
+
+// ---------- IPC: MCP tool calls (approval-gated) ----------
+// Renderer flow: tools:call without approved -> write-risk returns {needsApproval}
+// dialog result Allow once -> recall with approved:'once'; Always -> tools:always-allow then recall.
+ipcMain.handle('tools:call', async (_e, serverId, toolName, toolArgs, approved) => {
+  const entry = CATALOG.find((c) => c.id === serverId && c.kind === 'mcp');
+  if (!entry) return { ok: false, error: `Unknown tool server ${serverId}` };
+  const state = await loadToolState();
+  const toolKey = `${serverId}.${toolName}`;
+  const autoOk = entry.risk === 'read' || (approved === 'once') || state.alwaysAllow.includes(toolKey);
+  if (!autoOk) {
+    return { ok: false, needsApproval: true, serverId, toolName, toolArgs, risk: entry.risk };
+  }
+  const keys = await readKeys();
+  try {
+    const result = await mcp.callTool(entry, toolName, toolArgs, { projectDir: workspaceRoot, keys });
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err).slice(0, 2000) };
+  }
+});
+ipcMain.handle('tools:server-tools', async (_e, serverId) => {
+  const entry = CATALOG.find((c) => c.id === serverId && c.kind === 'mcp');
+  if (!entry) return { ok: false, error: 'unknown server', tools: [] };
+  const state = await loadToolState();
+  const data = await loadProjects();
+  if (!projectToolEnabled(state, data.activeId, serverId)) return { ok: false, error: 'server disabled for this project', tools: [] };
+  const keys = await readKeys();
+  if (entry.needsKey && !keys[entry.needsKey]) return { ok: false, error: `missing key: ${entry.needsKey}`, tools: [] };
+  try {
+    const tools = await mcp.listTools(entry, { projectDir: workspaceRoot, keys });
+    return { ok: true, tools: tools.map((t) => ({ name: t.name, description: (t.description || '').slice(0, 300), inputSchema: t.inputSchema })) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err).slice(0, 1000), tools: [] };
+  }
+});
+
+app.on('before-quit', () => mcp.stopAll());
