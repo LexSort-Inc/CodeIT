@@ -1,0 +1,17 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #0d1117; color: #e6edf3; font-family: -apple-system, system-ui, sans-serif; }
+.app { height: 100vh; display: flex; flex-direction: column; }
+.topbar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #30363d; }
+.muted { opacity: 0.6; font-size: 13px; }
+.grid { flex: 1; display: grid; grid-template-columns: 1.1fr 1fr 1fr; min-height: 0; }
+.pane { border-right: 1px solid #30363d; display: flex; flex-direction: column; min-height: 0; }
+.pane:last-child { border-right: 0; }
+.pane-title { padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.8; border-bottom: 1px solid #30363d; }
+.pane-title.tabs { display: flex; gap: 6px; padding: 6px; }
+.pane-title.tabs button.active { font-weight: bold; }
+.pane-body { flex: 1; min-height: 0; overflow: hidden; }
+.pane-body.editor { flex: 1.2; }
+button, select, input { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+button { cursor: pointer; }
+button:hover { border-color: #58a6ff; }
