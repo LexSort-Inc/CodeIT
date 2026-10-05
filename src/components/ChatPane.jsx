@@ -160,6 +160,7 @@ export default function ChatPane({ provider, model, fileContext, project, projec
     patchThread(tid, { toolLog: [] });
     // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
     if (thread.provider === 'opencode') {
+      const t0 = Date.now();
       const next = [...thread.msgs, { role: 'user', content: text }];
       patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running in project dir…_' }] });
       if (!window.codeit?.opencodeRun) {
@@ -174,9 +175,13 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
       });
+      window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0 });
       setBusyIds((b) => b.filter((id) => id !== tid));
       return;
     }
+    const t0 = Date.now();
+    const use = { prompt: 0, completion: 0 };
+    const onUsage = (u) => { use.prompt += u.prompt || 0; use.completion += u.completion || 0; };
     const withFile = fileContext
       ? `${text}\n\n--- ATTACHED FILE (${fileContext.path}) ---\n${fileContext.content.slice(0, 12000)}`
       : text;
@@ -203,7 +208,7 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         }
         await chatWithTools({
           provider: thread.provider, model: thread.model, messages: history, mcpTools,
-          onChunk: push,
+          onChunk: push, onUsage,
           onToolEvent: (e) => setThreads((cur) => cur.map((x) => x.id === tid
             ? { ...x, toolLog: [...x.toolLog, `${e.status === 'calling' ? '⚙️' : '✅'} ${e.serverId}.${e.name}`] }
             : x)),
@@ -212,7 +217,7 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         if (mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
           push(`_Note: ${thread.provider} is text-only here — MCP tools need Ollama/Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
         }
-        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push });
+        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage });
       }
     } catch (err) {
       const hint = err.code === 'NO_KEY'
@@ -225,6 +230,7 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         return { ...x, msgs: c };
       }));
     }
+    window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
     setBusyIds((b) => b.filter((id) => id !== tid));
   }
 

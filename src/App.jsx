@@ -6,6 +6,7 @@ import WebviewDock from './components/WebviewDock.jsx';
 import Settings from './components/Settings.jsx';
 import ProjectsPane from './components/ProjectsPane.jsx';
 import ExtensionsPane from './components/ExtensionsPane.jsx';
+import UsagePane from './components/UsagePane.jsx';
 import './styles.css';
 
 export default function App() {
@@ -20,7 +21,7 @@ export default function App() {
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [railTab, setRailTab] = useState('projects'); // projects | extensions
+  const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage
   const [filesOpen, setFilesOpen] = useState(false); // files+editor drawer, closed by default
   const [toolCount, setToolCount] = useState(0);
   const editorOpenRef = useRef(null);
@@ -106,11 +107,14 @@ export default function App() {
           <div className="pane-title tabs">
             <button onClick={() => setRailTab('projects')} className={railTab === 'projects' ? 'active' : ''}>Projects ({projects.length})</button>
             <button onClick={() => setRailTab('extensions')} className={railTab === 'extensions' ? 'active' : ''}>Extensions</button>
+            <button onClick={() => setRailTab('usage')} className={railTab === 'usage' ? 'active' : ''}>Usage</button>
           </div>
           <div className="pane-body">
             {railTab === 'projects'
               ? <ProjectsPane activeId={activeId} onSelect={selectProject} refreshKey={refreshKey} />
-              : <ExtensionsPane project={active} />}
+              : railTab === 'extensions'
+                ? <ExtensionsPane project={active} />
+                : <UsagePane refreshKey={refreshKey} />}
           </div>
         </section>
         <section className="pane">

@@ -273,6 +273,44 @@ ipcMain.handle('projects:save-chat', async (_e, id, msgs) => {
   return true;
 });
 
+// ---------- Usage metering: time + tokens + cost per call (userData/usage.json) ----------
+function usageFile() {
+  return path.join(storeDir(), 'usage.json');
+}
+async function loadUsage() {
+  try {
+    const raw = await fs.readFile(usageFile(), 'utf8');
+    const d = JSON.parse(raw);
+    if (Array.isArray(d.events)) return d;
+  } catch { /* first run */ }
+  return { events: [] };
+}
+ipcMain.handle('usage:record', async (_e, ev) => {
+  await ensureStore();
+  const d = await loadUsage();
+  d.events.push({ t: new Date().toISOString(), ...(ev || {}) });
+  await fs.writeFile(usageFile(), JSON.stringify({ events: d.events.slice(-2000) }, null, 2));
+  return true;
+});
+ipcMain.handle('usage:get', async () => {
+  const d = await loadUsage();
+  const byKey = {};
+  for (const e of d.events) {
+    const k = `${e.provider || '?'}|${e.model || '?'}`;
+    const b = byKey[k] || (byKey[k] = { provider: e.provider, model: e.model, calls: 0, prompt: 0, completion: 0, ms: 0 });
+    b.calls += 1;
+    b.prompt += e.prompt || 0;
+    b.completion += e.completion || 0;
+    b.ms += e.ms || 0;
+  }
+  return { events: d.events.slice(-100), byKey, total: d.events.length };
+});
+ipcMain.handle('usage:reset', async () => {
+  await ensureStore();
+  await fs.writeFile(usageFile(), JSON.stringify({ events: [] }, null, 2));
+  return true;
+});
+
 // ---------- IPC: git info for active project ----------
 function sh(cmd, cwd) {
   return new Promise((resolve) => {
