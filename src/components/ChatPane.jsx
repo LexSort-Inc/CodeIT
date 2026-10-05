@@ -158,6 +158,25 @@ export default function ChatPane({ provider, model, fileContext, project, projec
     const tid = thread.id;
     setBusyIds((b) => [...b, tid]);
     patchThread(tid, { toolLog: [] });
+    // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
+    if (thread.provider === 'opencode') {
+      const next = [...thread.msgs, { role: 'user', content: text }];
+      patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running in project dir…_' }] });
+      if (!window.codeit?.opencodeRun) {
+        patchThread(tid, { msgs: [...next, { role: 'assistant', content: 'Error: OpenCode engine needs Electron (`npm run dev`).' }] });
+        setBusyIds((b) => b.filter((id) => id !== tid));
+        return;
+      }
+      const recent = next.slice(-6).map((m) => `${m.role}: ${m.content.slice(0, 2000)}`).join('\n\n');
+      const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- PINNED ---\n${pinsText || '(none)'}\n\n--- RECENT ---\n${recent}`;
+      const r = await window.codeit.opencodeRun(project?.path || '', thread.model, prompt);
+      patchThread(tid, {
+        msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}` }],
+        toolLog: r.ok ? ['🤖 opencode agent run'] : [],
+      });
+      setBusyIds((b) => b.filter((id) => id !== tid));
+      return;
+    }
     const withFile = fileContext
       ? `${text}\n\n--- ATTACHED FILE (${fileContext.path}) ---\n${fileContext.content.slice(0, 12000)}`
       : text;

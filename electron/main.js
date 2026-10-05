@@ -149,6 +149,20 @@ ipcMain.handle('exec:run', async (_e, cmd) => {
   });
 });
 
+// ---------- IPC: OpenCode agent (non-interactive run in project dir) ----------
+ipcMain.handle('opencode:run', async (_e, dir, model, prompt) => {
+  const args = ['run', String(prompt || '')];
+  if (dir) args.push('--dir', String(dir));
+  if (model && model !== 'default') args.push('-m', String(model));
+  return new Promise((resolve) => {
+    execFile('opencode', args, { cwd: dir || os.homedir(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const out = String(stdout || '').slice(0, 20000);
+      if (error && !out) resolve({ ok: false, error: String(stderr || error.message).slice(0, 2000) });
+      else resolve({ ok: true, out });
+    });
+  });
+});
+
 // ---------- IPC: LLM passthrough ----------
 ipcMain.handle('llm:ping', async (_e, host) => {
   try {

@@ -6,6 +6,7 @@ const KEY_FIELDS = [
   { id: 'groq', label: 'groq' },
   { id: 'deepseek', label: 'deepseek' },
   { id: 'openrouter', label: 'openrouter' },
+  { id: 'anthropic', label: 'anthropic (claude)' },
   { id: 'brave', label: 'brave (search)' }
 ];
 

@@ -8,12 +8,14 @@ export const PROVIDERS = [
   { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-2.0-flash', 'gemini-1.5-flash'] },
   { id: 'groq', label: 'Groq (free tier)', supportsTools: true, contextK: 128, models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'] },
   { id: 'deepseek', label: 'DeepSeek', supportsTools: true, contextK: 64, models: ['deepseek-chat', 'deepseek-coder'] },
-  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-2-9b-it:free'] }
+  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-2-9b-it:free'] },
+  { id: 'anthropic', label: 'Claude (Anthropic)', supportsTools: false, contextK: 200, models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'] },
+  { id: 'opencode', label: 'OpenCode (agent)', supportsTools: true, contextK: 128, models: ['default'] }
 ];
 
 // Provider + tool keys. Electron: OS keychain via keys:* IPC (safeStorage).
 // Browser preview: localStorage fallback. Legacy localStorage keys migrate up on first load.
-const LEGACY = ['gemini', 'groq', 'deepseek', 'openrouter', 'brave'];
+const LEGACY = ['gemini', 'groq', 'deepseek', 'openrouter', 'brave', 'anthropic'];
 let keyCache = null;
 export async function getKeys() {
   if (!window.codeit?.keysGet) {
@@ -87,6 +89,17 @@ export async function streamChat({ provider, model, messages, onChunk }) {
     throw e;
   }
 
+  if (provider === 'opencode') {
+    const e = new Error('OpenCode runs via the agent runner, not streaming chat — use a thread with the OpenCode engine.');
+    e.code = 'OPENCODE_ENGINE';
+    throw e;
+  }
+
+  if (provider === 'anthropic') {
+    await streamAnthropic({ model, key, messages, onChunk });
+    return;
+  }
+
   const conf = {
     gemini: { url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${key}`, map: toGemini, parse: parseGemini },
     groq: { url: 'https://api.groq.com/openai/v1/chat/completions', map: (m) => ({ model, messages: m, stream: true }), parse: parseOpenAI },
@@ -112,6 +125,24 @@ async function parseGemini(res, onChunk) {
     if (!t.startsWith('data:')) continue;
     try {
       const tok = JSON.parse(t.slice(5))?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+      if (tok) onChunk(tok);
+    } catch { /* keep-alive */ }
+  }
+}
+async function streamAnthropic({ model, key, messages, onChunk }) {
+  const sys = messages.find((m) => m.role === 'system');
+  const turns = messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content }));
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 4096, system: sys?.content, messages: turns, stream: true })
+  });
+  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  for await (const line of sseLines(res)) {
+    const t = line.trim();
+    if (!t.startsWith('data:')) continue;
+    try {
+      const tok = JSON.parse(t.slice(5))?.delta?.text || '';
       if (tok) onChunk(tok);
     } catch { /* keep-alive */ }
   }
@@ -157,6 +188,11 @@ function toOpenAiTools(mcpTools) {
 }
 
 export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolEvent }) {
+  if (provider === 'opencode') {
+    const e = new Error('OpenCode runs via the agent runner, not the MCP loop.');
+    e.code = 'OPENCODE_ENGINE';
+    throw e;
+  }
   const keys = await getKeys();
   const key = provider === 'ollama' ? null : keys[provider];
   if (provider !== 'ollama' && !key) {
