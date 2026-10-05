@@ -50,7 +50,7 @@ function estimate(text, model) {
 }
 
 export default function ChatPane({ provider, model, fileContext, setFileContext, project, projectNotes,
-  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor }) {
+  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor, openThreadId, onThreadOpened }) {
   const projectId = project?.id || 'default';
   const [threads, setThreads] = useState(() => [newThread(provider, model, 0)]);
   const [activeId, setActiveId] = useState(() => threads[0].id);
@@ -146,6 +146,17 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     onThreadSwitch?.({ id: activeId, editorPath: active?.editorPath || null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
+
+  // external jump (global chat search): open + activate thread, restoring if archived
+  useEffect(() => {
+    if (!openThreadId) return;
+    const t = threads.find((x) => x.id === openThreadId);
+    if (!t) return;
+    if (t.archived) restoreThread(t.id);
+    else setActiveId(t.id);
+    onThreadOpened?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openThreadId, threads]);
   useEffect(() => {
     registerThreadEditor?.((path) => {
       setThreads((cur) => cur.map((t) => (t.id === activeId ? { ...t, editorPath: path } : t)));

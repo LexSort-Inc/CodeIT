@@ -351,6 +351,44 @@ ipcMain.handle('usage:reset', async () => {
   return true;
 });
 
+// ---------- Global chat search across all projects ----------
+ipcMain.handle('chats:search', async (_e, q) => {
+  const query = String(q || '').trim().toLowerCase();
+  if (!query) return [];
+  const data = await loadProjects().catch(() => ({ projects: [] }));
+  const names = Object.fromEntries((data.projects || []).map((p) => [p.id, p.name]));
+  let files = [];
+  try { files = await fs.readdir(chatsDir()); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const pid = f.slice(0, -5);
+    let parsed = null;
+    try { parsed = JSON.parse(await fs.readFile(path.join(chatsDir(), f), 'utf8')); } catch { continue; }
+    const list = Array.isArray(parsed?.threads) ? parsed.threads
+      : Array.isArray(parsed) && parsed.length ? [{ id: 'legacy', provider: '?', model: '?', title: 'Chat history', updatedAt: null, archived: false, msgs: parsed }] : [];
+    for (const t of list) {
+      const hay = `${t.title || ''} ${t.provider || ''} ${t.model || ''}`.toLowerCase();
+      let snippet = null;
+      if (hay.includes(query)) snippet = t.title || `${t.provider}/${t.model}`;
+      else {
+        const hit = (t.msgs || []).find((m) => String(m.content || '').toLowerCase().includes(query));
+        if (hit) {
+          const c = String(hit.content);
+          const i = c.toLowerCase().indexOf(query);
+          snippet = (i > 40 ? '…' : '') + c.slice(Math.max(0, i - 40), i + 80).replace(/\s+/g, ' ');
+        }
+      }
+      if (snippet) {
+        out.push({ projectId: pid, projectName: names[pid] || pid, threadId: t.id, title: t.title || 'Chat history', provider: t.provider, model: t.model, updatedAt: t.updatedAt || null, archived: !!t.archived, snippet: String(snippet).slice(0, 160) });
+      }
+    }
+    if (out.length >= 60) break;
+  }
+  out.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return out.slice(0, 30);
+});
+
 // ---------- IPC: git info for active project ----------
 function sh(cmd, cwd) {
   return new Promise((resolve) => {

@@ -11,6 +11,7 @@ import EditorPaneInner from './components/EditorPaneInner.jsx';
 import TasksPane from './components/TasksPane.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
+import ChatSearch from './components/ChatSearch.jsx';
 import { Tabs, Menu } from './components/ui.jsx';
 import './styles.css';
 
@@ -31,6 +32,8 @@ export default function App() {
   const [toolCount, setToolCount] = useState(0);
   const [zen, setZen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [pendingThread, setPendingThread] = useState(null);
   const [planMode, setPlanMode] = useState(false);
   const [usageTick, setUsageTick] = useState(0);
   const editorOpenRef = useRef(null);
@@ -62,6 +65,12 @@ export default function App() {
     setActiveId(selectId ?? data.activeId);
   }
   useEffect(() => { reloadProjects(); }, []);
+
+  async function jumpToChat(r) {
+    if (!r) return;
+    if (r.projectId !== activeId) await selectProject(r.projectId);
+    setPendingThread(r.threadId);
+  }
 
   async function selectProject(id) {
     if (!window.codeit?.projectsActivate) { setActiveId(id); return; }
@@ -161,7 +170,8 @@ export default function App() {
             <ChatPane provider={provider} model={model} fileContext={fileContext} setFileContext={setFileContext}
               project={active} projectNotes={notes} onToolCount={setToolCount} planMode={planMode} setPlanMode={setPlanMode}
               onUsageTick={() => setUsageTick((t) => t + 1)} onThreadSwitch={onThreadSwitch}
-              registerThreadEditor={(fn) => { threadEditorRef.current = fn; }} />
+              registerThreadEditor={(fn) => { threadEditorRef.current = fn; }}
+              openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)} />
           </div>
         </section>
         <section className="pane files-pane" aria-label="Files and editor">
@@ -197,10 +207,12 @@ export default function App() {
         </section>
       </div>
       <StatusBar project={active} git={git} toolCount={toolCount} usageTick={usageTick} zen={zen} setZen={setZen} onPalette={() => setPaletteOpen(true)} />
+      {searchOpen && <ChatSearch onClose={() => setSearchOpen(false)} onJump={jumpToChat} />}
       {paletteOpen && (
         <CommandPalette onClose={() => setPaletteOpen(false)}
           actions={[
             { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
+            { id: 'search-chats', label: 'Search all chats…', run: () => setSearchOpen(true) },
             { id: 'files', label: `${filesOpen ? 'Hide' : 'Show'} files + editor`, run: () => setFilesOpen(!filesOpen) },
             { id: 'plan', label: `${planMode ? 'Exit' : 'Enter'} plan mode`, run: () => setPlanMode(!planMode) },
             { id: 'terminal', label: 'Open terminal tab', run: () => setRightTab('terminal') },

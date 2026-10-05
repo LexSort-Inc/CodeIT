@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('codeit', {
   projectsReveal: (p) => ipcRenderer.invoke('projects:reveal', p),
   projectsGetChat: (id) => ipcRenderer.invoke('projects:get-chat', id),
   projectsSaveChat: (id, msgs) => ipcRenderer.invoke('projects:save-chat', id, msgs),
+  chatsSearch: (q) => ipcRenderer.invoke('chats:search', q),
   projectsClone: (repo, parentDir) => ipcRenderer.invoke('projects:clone', repo, parentDir),
   gitInfo: () => ipcRenderer.invoke('git:info'),
   githubRepos: (limit) => ipcRenderer.invoke('github:repos', limit),
