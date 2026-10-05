@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { costUSD, fmtCost, fmtTokens, fmtMs } from '../llm/pricing.js';
+import { Empty } from './ui.jsx';
 
 // Usage metering: per-provider/model calls, tokens, time, estimated cost.
 // Source: usage.json via usage:get IPC (falls back to empty outside Electron).
@@ -28,30 +29,30 @@ export default function UsagePane({ refreshKey }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12 }}>
-      <div style={{ padding: 8, borderBottom: '1px solid #30363d', display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div className="toolbar">
         <strong style={{ fontSize: 13 }}>Usage</strong>
-        <span style={{ flex: 1 }} />
-        <button onClick={refresh} title="Refresh">↻</button>
-        <button onClick={reset} title="Clear history">Reset</button>
+        <span className="spacer" />
+        <button className="btn btn-sm btn-ghost" onClick={refresh} title="Refresh">↻</button>
+        <button className="btn btn-sm btn-danger" onClick={reset} title="Clear history">Reset</button>
       </div>
-      <div style={{ padding: 8, borderBottom: '1px solid #30363d', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 12 }}>
         <span>Calls <strong>{grand.calls}</strong></span>
         <span>In <strong>{fmtTokens(grand.prompt)}</strong></span>
         <span>Out <strong>{fmtTokens(grand.completion)}</strong></span>
         <span>Time <strong>{fmtMs(grand.ms)}</strong></span>
         <span>Est. <strong>{grand.known ? fmtCost(grand.cost) : fmtCost(grand.cost) + '+'}</strong></span>
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {rows.length === 0 && <div style={{ opacity: 0.6 }}>No calls yet — send a chat to start metering. Local models cost $0.</div>}
+      <div className="pane-body scroll pad stack">
+        {rows.length === 0 && <Empty>No calls yet — send a chat to start metering. Local models cost $0.</Empty>}
         {rows.map((r) => (
-          <div key={`${r.provider}|${r.model}`} style={{ border: '1px solid #30363d', borderRadius: 8, padding: '6px 8px', background: '#161b22' }}>
-            <div style={{ fontWeight: 600 }}>{r.provider} / {r.model}</div>
-            <div style={{ opacity: 0.8, marginTop: 2 }}>
+          <div key={`${r.provider}|${r.model}`} className="card">
+            <div className="title">{r.provider} / {r.model}</div>
+            <div className="sub" style={{ whiteSpace: 'normal' }}>
               {r.calls} calls · ↑{fmtTokens(r.prompt)} ↓{fmtTokens(r.completion)} · {fmtMs(r.ms)} · {fmtCost(costUSD(r.model, r.prompt, r.completion))}
             </div>
           </div>
         ))}
-        <div style={{ opacity: 0.55, fontSize: 11 }}>Costs are estimates from Oct 2026 list prices. `—` = unknown model price. OpenCode runs meter time only.</div>
+        <div style={{ color: 'var(--dim)', fontSize: 11 }}>Costs are estimates from Oct 2026 list prices. `—` = unknown model price. OpenCode runs meter time only.</div>
       </div>
     </div>
   );

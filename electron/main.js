@@ -149,6 +149,46 @@ ipcMain.handle('exec:run', async (_e, cmd) => {
   });
 });
 
+// ---------- IPC: background tasks (spawn-based, polled tail, killable) ----------
+// Long commands (docker build, npm install, test suites) outlive chat navigation.
+const { spawn } = require('child_process');
+const TASKS = new Map();
+let taskSeq = 0;
+function taskSnapshot(t) {
+  return { id: t.id, cmd: t.cmd, running: t.running, code: t.code, startedAt: t.startedAt, ms: Date.now() - t.startedAt };
+}
+ipcMain.handle('tasks:start', async (_e, cmd) => {
+  const id = `task_${Date.now().toString(36)}_${(taskSeq++).toString(36)}`;
+  const t = { id, cmd: String(cmd || ''), out: '', running: true, code: null, startedAt: Date.now(), proc: null };
+  try {
+    const shell = process.platform === 'win32';
+    const proc = spawn(t.cmd, { cwd: workspaceRoot, shell, windowsHide: true });
+    t.proc = proc;
+    proc.stdout.on('data', (d) => { t.out = (t.out + d.toString()).slice(-200000); });
+    proc.stderr.on('data', (d) => { t.out = (t.out + d.toString()).slice(-200000); });
+    proc.on('close', (code) => { t.running = false; t.code = code; });
+    proc.on('error', (err) => { t.running = false; t.code = 1; t.out += `\n[spawn error] ${String(err.message).slice(0, 500)}`; });
+  } catch (err) {
+    t.running = false; t.code = 1; t.out = `[spawn error] ${String(err.message).slice(0, 500)}`;
+  }
+  TASKS.set(id, t);
+  if (TASKS.size > 20) { const oldest = [...TASKS.keys()][0]; TASKS.delete(oldest); }
+  return { id, cmd: t.cmd };
+});
+ipcMain.handle('tasks:list', async () => [...TASKS.values()].map(taskSnapshot).reverse());
+ipcMain.handle('tasks:tail', async (_e, id) => {
+  const t = TASKS.get(id);
+  if (!t) return { ok: false, out: '' };
+  return { ok: true, out: t.out.slice(-20000), running: t.running };
+});
+ipcMain.handle('tasks:kill', async (_e, id) => {
+  const t = TASKS.get(id);
+  if (!t) return { ok: false };
+  try { t.proc?.kill('SIGTERM'); } catch {}
+  setTimeout(() => { try { if (t.running) t.proc?.kill('SIGKILL'); } catch {} }, 3000);
+  return { ok: true };
+});
+
 // ---------- IPC: OpenCode agent (non-interactive run in project dir) ----------
 ipcMain.handle('opencode:run', async (_e, dir, model, prompt) => {
   const args = ['run', String(prompt || '')];

@@ -7,6 +7,10 @@ contextBridge.exposeInMainWorld('codeit', {
   fsRead: (p) => ipcRenderer.invoke('fs:read', p),
   fsWrite: (p, c) => ipcRenderer.invoke('fs:write', p, c),
   execRun: (cmd) => ipcRenderer.invoke('exec:run', cmd),
+  tasksStart: (cmd) => ipcRenderer.invoke('tasks:start', cmd),
+  tasksList: () => ipcRenderer.invoke('tasks:list'),
+  tasksTail: (id) => ipcRenderer.invoke('tasks:tail', id),
+  tasksKill: (id) => ipcRenderer.invoke('tasks:kill', id),
   opencodeRun: (dir, model, prompt) => ipcRenderer.invoke('opencode:run', dir, model, prompt),
   llmPing: (host) => ipcRenderer.invoke('llm:ping', host),
   // projects — organized multi-project workflow (local folders + GitHub repos)

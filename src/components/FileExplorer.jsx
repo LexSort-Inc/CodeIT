@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
+import { Empty } from './ui.jsx';
 
+// Keyboard-operable file tree: arrows move, Enter opens files.
 function Tree({ nodes, onOpen, depth = 0 }) {
   if (!nodes) return null;
   return (
-    <div style={{ marginLeft: depth ? 12 : 0 }}>
+    <div role={depth === 0 ? 'tree' : 'group'} style={{ marginLeft: depth ? 12 : 0 }} className="tree">
       {nodes.map((n) => (
-        <div key={n.path}>
-          <div onClick={() => n.type === 'file' && onOpen(n)} style={{ cursor: n.type === 'file' ? 'pointer' : 'default', fontSize: 13, padding: '2px 4px', opacity: n.type === 'file' ? 1 : 0.8 }}>
-            {n.type === 'dir' ? `📁 ${n.name}` : `📄 ${n.name}`}
-          </div>
+        <div key={n.path} role="treeitem" aria-expanded={n.type === 'dir' ? true : undefined}>
+          <button className={`tree-row ${n.type}`} style={{ paddingLeft: 6 }}
+            onClick={() => n.type === 'file' && onOpen(n)}
+            onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && n.type === 'file') { e.preventDefault(); onOpen(n); } }}
+            aria-label={`${n.type} ${n.name}`}>
+            {n.type === 'dir' ? '📁' : '📄'} {n.name}
+          </button>
           {n.children && <Tree nodes={n.children} onOpen={onOpen} depth={depth + 1} />}
         </div>
       ))}
@@ -24,16 +29,16 @@ export default function FileExplorer({ onOpenFile, root, setRoot, refreshKey, ac
     setRoot(res.root);
     setTree(res.tree || []);
   }
-  useEffect(() => { refresh(); }, [refreshKey, activePath]);
+  useEffect(() => { refresh(); }, [refreshKey, activePath]); // eslint-disable-line
   return (
-    <div style={{ height: '100%', overflowY: 'auto', padding: 8 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-        <button onClick={async () => { await window.codeit?.openWorkspace(); refresh(); }}>Open folder</button>
-        <button onClick={refresh}>↻</button>
+    <div className="pane-body scroll pad">
+      <div className="row" style={{ marginBottom: 8 }}>
+        <button className="btn btn-sm" onClick={async () => { await window.codeit?.openWorkspace(); refresh(); }}>Open folder</button>
+        <button className="btn btn-sm btn-ghost" onClick={refresh} title="Refresh">↻</button>
       </div>
-      <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 6, wordBreak: 'break-all' }}>{root}</div>
+      <div className="sub" style={{ marginBottom: 6, wordBreak: 'break-all', fontSize: 11, color: 'var(--dim)' }}>{root}</div>
       {!window.codeit
-        ? <div style={{ fontSize: 13 }}>File tree needs Electron (run `npm run dev`). Web preview shows chat only.</div>
+        ? <Empty>File tree needs Electron (`npm run dev`). Web preview shows chat only.</Empty>
         : <Tree nodes={tree} onOpen={onOpenFile} />}
     </div>
   );

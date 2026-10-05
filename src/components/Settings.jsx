@@ -10,6 +10,7 @@ const KEY_FIELDS = [
   { id: 'brave', label: 'brave (search)' }
 ];
 
+// App-level selects are DEFAULTS for new threads; each thread has its own picker.
 export default function Settings({ provider, setProvider, model, setModel, toolCount }) {
   const [keys, setKeysState] = useState({});
   const [show, setShow] = useState(false);
@@ -18,12 +19,14 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
     getKeys().then((k) => { setKeysState(k); setSecured(Boolean(window.codeit?.keysGet)); });
   }, []);
   const info = PROVIDERS.find((p) => p.id === provider);
+  const keysSet = KEY_FIELDS.some((f) => keys[f.id]);
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-      <select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(PROVIDERS.find((p) => p.id === e.target.value).models[0]); }}>
+    <div className="row" title="Defaults for new threads — each thread keeps its own model">
+      <span className="muted" style={{ fontSize: 11 }}>Defaults</span>
+      <select aria-label="Default provider for new threads" value={provider} onChange={(e) => { setProvider(e.target.value); setModel(PROVIDERS.find((p) => p.id === e.target.value).models[0]); }}>
         {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}{p.supportsTools ? '' : ' (no tools)'}</option>)}
       </select>
-      <select value={model} onChange={(e) => setModel(e.target.value)}>
+      <select aria-label="Default model for new threads" value={model} onChange={(e) => setModel(e.target.value)}>
         {PROVIDERS.find((p) => p.id === provider).models.map((m) => <option key={m} value={m}>{m}</option>)}
       </select>
       {toolCount > 0 && (
@@ -32,17 +35,17 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
           🧰{toolCount}{info.supportsTools ? '' : ' ⚠'}
         </span>
       )}
-      <button onClick={() => setShow(!show)}>Keys</button>
+      <button className="btn btn-sm" onClick={() => setShow(!show)} aria-expanded={show}>Keys{keysSet ? ' ●' : ''}</button>
       {show && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', border: '1px solid #333', padding: 6, borderRadius: 6, flexWrap: 'wrap' }}>
+        <div className="card row" style={{ flexWrap: 'wrap' }}>
           {KEY_FIELDS.map((f) => (
             <label key={f.id} style={{ fontSize: 12 }}>{f.label}
-              <input type="password" value={keys[f.id] || ''} placeholder="free key"
+              <input type="password" value={keys[f.id] || ''} placeholder="free key" autoComplete="off"
                 onChange={async (e) => { const v = e.target.value; await setKey(f.id, v); setKeysState({ ...keys, [f.id]: v }); }}
                 style={{ width: 110, marginLeft: 4 }} />
             </label>
           ))}
-          <span style={{ fontSize: 11, opacity: 0.7 }}>
+          <span style={{ fontSize: 11, color: 'var(--dim)' }}>
             {secured ? '🔒 OS keychain. ' : ''}Ollama needs no key. Keys never leave this machine.
           </span>
         </div>
