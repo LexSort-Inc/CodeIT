@@ -25,7 +25,7 @@ cp .env.example .env
 
 ```bash
 # on ThinkCenter (windowstcenter / 100.119.205.77):
-git clone https://github.com/JustMeMedia/CodeIT.git
+git clone https://github.com/LexSort-Inc/CodeIT.git
 cd CodeIT
 npm install
 npm run dist:win   # outputs release/CodeIT-0.1.0-setup.exe

@@ -1,5 +1,5 @@
 # CodeIT Windows setup — run once on ThinkCenter (PowerShell as user, no admin needed except Build Tools)
-# Usage:  git clone https://github.com/JustMeMedia/CodeIT.git; cd CodeIT; powershell -ExecutionPolicy Bypass -File scripts\setup-win.ps1
+# Usage:  git clone https://github.com/LexSort-Inc/CodeIT.git; cd CodeIT; powershell -ExecutionPolicy Bypass -File scripts\setup-win.ps1
 
 $ErrorActionPreference = 'Stop'
 Write-Host '== CodeIT Windows setup ==' -ForegroundColor Cyan

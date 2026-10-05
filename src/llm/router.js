@@ -78,7 +78,7 @@ export async function streamChat({ provider, model, messages, onChunk }) {
 
   const headers = { 'Content-Type': 'application/json' };
   if (provider === 'groq' || provider === 'deepseek') headers.Authorization = `Bearer ${key}`;
-  if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://github.com/JustMeMedia/CodeIT'; }
+  if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://github.com/LexSort-Inc/CodeIT'; }
 
   const res = await fetch(conf.url, { method: 'POST', headers, body: JSON.stringify(conf.map(messages)) });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);

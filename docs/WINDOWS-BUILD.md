@@ -7,7 +7,7 @@ Mac (`npm run dev`) is done here. Windows `.exe` must be built on the ThinkCente
 
 ```powershell
 # on ThinkCenter PowerShell:
-git clone https://github.com/JustMeMedia/CodeIT.git
+git clone https://github.com/LexSort-Inc/CodeIT.git
 cd CodeIT
 npm install
 ollama pull qwen2.5-coder:7b
