@@ -15,8 +15,6 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   target:
     - dmg
-  notarize:
-    teamId: ${APPLE_TEAM_ID}
 win:
   target:
     - nsis
