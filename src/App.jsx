@@ -21,6 +21,7 @@ export default function App() {
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [railTab, setRailTab] = useState('projects'); // projects | extensions
+  const [filesOpen, setFilesOpen] = useState(false); // files+editor drawer, closed by default
   const [toolCount, setToolCount] = useState(0);
   const editorOpenRef = useRef(null);
 
@@ -92,6 +93,7 @@ export default function App() {
         <span style={{ flex: 1 }} />
         {active && (
           <span style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setFilesOpen(!filesOpen)} title="Toggle files + editor drawer">{filesOpen ? 'Hide files' : 'Files'}</button>
             <button onClick={() => window.codeit?.projectsReveal(active.path)} title="Show in Finder/Explorer">Reveal</button>
             <button onClick={renameProject} title="Rename project">Rename</button>
             <button onClick={removeProject} title="Remove from list (keeps files)">✕</button>
@@ -99,7 +101,7 @@ export default function App() {
         )}
         <Settings provider={provider} setProvider={setProvider} model={model} setModel={setModel} toolCount={toolCount} />
       </header>
-      <div className="grid-projects">
+      <div className={`grid-projects${filesOpen ? '' : ' files-closed'}`}>
         <section className="pane rail">
           <div className="pane-title tabs">
             <button onClick={() => setRailTab('projects')} className={railTab === 'projects' ? 'active' : ''}>Projects ({projects.length})</button>
@@ -115,7 +117,7 @@ export default function App() {
           <div className="pane-title">Chat — {provider}/{model} {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
           <div className="pane-body"><ChatPane provider={provider} model={model} fileContext={fileContext} project={active} projectNotes={notes} onToolCount={setToolCount} /></div>
         </section>
-        <section className="pane">
+        <section className="pane files-pane">
           <div className="pane-title">Files {root ? `· ${root}` : ''}</div>
           <div className="pane-body files">
             <FileExplorer root={root} setRoot={setRoot} onOpenFile={(f) => { setFile(f); editorOpenRef.current?.(f); }} refreshKey={refreshKey} activePath={active?.path} />

@@ -5,6 +5,8 @@ body { margin: 0; background: #0d1117; color: #e6edf3; font-family: -apple-syste
 .topbar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #30363d; }
 .muted { opacity: 0.6; font-size: 13px; }
 .grid-projects { flex: 1; display: grid; grid-template-columns: 240px 1.1fr 1fr 1fr; min-height: 0; }
+.grid-projects.files-closed { grid-template-columns: 240px 1.6fr 0 1.6fr; }
+.grid-projects.files-closed .pane.files-pane { display: none; }
 .pane.rail { background: #010409; }
 .pane-body.files { flex: 1; }
 .pane { border-right: 1px solid #30363d; display: flex; flex-direction: column; min-height: 0; }
