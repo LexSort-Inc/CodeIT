@@ -7,6 +7,11 @@ import Settings from './components/Settings.jsx';
 import ProjectsPane from './components/ProjectsPane.jsx';
 import ExtensionsPane from './components/ExtensionsPane.jsx';
 import UsagePane from './components/UsagePane.jsx';
+import EditorPaneInner from './components/EditorPaneInner.jsx';
+import TasksPane from './components/TasksPane.jsx';
+import StatusBar from './components/StatusBar.jsx';
+import CommandPalette from './components/CommandPalette.jsx';
+import { Tabs, Menu } from './components/ui.jsx';
 import './styles.css';
 
 export default function App() {
@@ -15,7 +20,7 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
-  const [rightTab, setRightTab] = useState('terminal'); // terminal | web | notes
+  const [rightTab, setRightTab] = useState('terminal'); // terminal | tasks | notes | web
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
@@ -24,7 +29,29 @@ export default function App() {
   const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage
   const [filesOpen, setFilesOpen] = useState(false); // files+editor drawer, closed by default
   const [toolCount, setToolCount] = useState(0);
+  const [zen, setZen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [usageTick, setUsageTick] = useState(0);
   const editorOpenRef = useRef(null);
+  const threadEditorRef = useRef(null); // ChatPane registers: record opened file on active thread
+
+  function openFile(f) {
+    setFile(f);
+    editorOpenRef.current?.(f);
+    threadEditorRef.current?.(f.path);
+  }
+
+  // switching threads restores that thread's file in the editor
+  function onThreadSwitch({ editorPath }) {
+    if (!editorPath || editorPath === file?.path) return;
+    if (!window.codeit) return;
+    window.codeit.fsRead(editorPath).then(() => {
+      const f = { path: editorPath, name: editorPath.split(/[\\/]/).pop(), type: 'file' };
+      setFile(f);
+      editorOpenRef.current?.(f);
+    }).catch(() => {});
+  }
 
   const active = projects.find((p) => p.id === activeId) || null;
 
@@ -70,7 +97,8 @@ export default function App() {
   }
 
   async function removeProject() {
-    if (!active || !confirm(`Remove "${active.name}" from CodeIT? (Files stay on disk.)`)) return;
+    if (!active || !window.codeit?.projectsRemove) return;
+    if (!confirm(`Remove "${active.name}" from CodeIT? (Files stay on disk.)`)) return;
     const data = await window.codeit.projectsRemove(active.id);
     setProjects(data.projects);
     setActiveId(data.activeId);
@@ -78,36 +106,46 @@ export default function App() {
   }
 
   async function renameProject() {
-    if (!active) return;
+    if (!active || !window.codeit?.projectsRename) return;
     const name = prompt('Rename project:', active.name);
     if (!name) return;
     const data = await window.codeit.projectsRename(active.id, name);
     setProjects(data.projects);
   }
 
+  // global shortcuts: Cmd/Ctrl+K palette, Cmd/Ctrl+K Z zen handled in palette
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((o) => !o); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
-    <div className="app">
+    <div className={`app${zen ? ' zen' : ''}`}>
       <header className="topbar">
-        <strong>CodeIT</strong>
+        <strong className="brand">CodeIT</strong>
         <span className="muted">{active ? `${active.kind === 'github' ? '⬣' : '📁'} ${active.name}` : 'no project selected'}</span>
         {git.isRepo && <span className="muted">· {git.branch || 'detached'}{git.dirty ? ` · ●${git.dirty}` : ' · clean'}</span>}
-        <span style={{ flex: 1 }} />
+        <span className="spacer" />
         {active && (
-          <span style={{ display: 'flex', gap: 6 }}>
-            <button onClick={() => setFilesOpen(!filesOpen)} title="Toggle files + editor drawer">{filesOpen ? 'Hide files' : 'Files'}</button>
-            <button onClick={() => window.codeit?.projectsReveal(active.path)} title="Show in Finder/Explorer">Reveal</button>
-            <button onClick={renameProject} title="Rename project">Rename</button>
-            <button onClick={removeProject} title="Remove from list (keeps files)">✕</button>
+          <span className="row">
+            <button className="btn btn-ghost btn-sm" onClick={() => setFilesOpen(!filesOpen)} title="Toggle files + editor drawer">{filesOpen ? 'Hide files' : 'Files'}</button>
+            <Menu label="…">
+              <button onClick={() => window.codeit?.projectsReveal(active.path)}>Reveal in Finder/Explorer</button>
+              <button onClick={renameProject}>Rename project</button>
+              <button className="danger" onClick={removeProject}>Remove (keeps files)</button>
+            </Menu>
           </span>
         )}
         <Settings provider={provider} setProvider={setProvider} model={model} setModel={setModel} toolCount={toolCount} />
       </header>
       <div className={`grid-projects${filesOpen ? '' : ' files-closed'}`}>
-        <section className="pane rail">
+        <section className="pane rail" aria-label="Projects and extensions">
           <div className="pane-title tabs">
-            <button onClick={() => setRailTab('projects')} className={railTab === 'projects' ? 'active' : ''}>Projects ({projects.length})</button>
-            <button onClick={() => setRailTab('extensions')} className={railTab === 'extensions' ? 'active' : ''}>Extensions</button>
-            <button onClick={() => setRailTab('usage')} className={railTab === 'usage' ? 'active' : ''}>Usage</button>
+            <Tabs tabs={['projects', 'extensions', 'usage']} active={railTab} onChange={setRailTab}
+              labels={{ projects: `Projects (${projects.length})`, extensions: 'Extensions', usage: 'Usage' }} />
           </div>
           <div className="pane-body">
             {railTab === 'projects'
@@ -117,89 +155,63 @@ export default function App() {
                 : <UsagePane refreshKey={refreshKey} />}
           </div>
         </section>
-        <section className="pane">
+        <section className="pane" aria-label="Chat">
           <div className="pane-title">Chat — multi-model {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
-          <div className="pane-body"><ChatPane provider={provider} model={model} fileContext={fileContext} project={active} projectNotes={notes} onToolCount={setToolCount} /></div>
+          <div className="pane-body">
+            <ChatPane provider={provider} model={model} fileContext={fileContext} setFileContext={setFileContext}
+              project={active} projectNotes={notes} onToolCount={setToolCount} planMode={planMode} setPlanMode={setPlanMode}
+              onUsageTick={() => setUsageTick((t) => t + 1)} onThreadSwitch={onThreadSwitch}
+              registerThreadEditor={(fn) => { threadEditorRef.current = fn; }} />
+          </div>
         </section>
-        <section className="pane files-pane">
+        <section className="pane files-pane" aria-label="Files and editor">
           <div className="pane-title">Files {root ? `· ${root}` : ''}</div>
           <div className="pane-body files">
-            <FileExplorer root={root} setRoot={setRoot} onOpenFile={(f) => { setFile(f); editorOpenRef.current?.(f); }} refreshKey={refreshKey} activePath={active?.path} />
+            <FileExplorer root={root} setRoot={setRoot} onOpenFile={openFile} refreshKey={refreshKey} activePath={active?.path} />
           </div>
           <div className="pane-title">Editor {active?.pinned?.length ? `· 📌${active.pinned.length}` : ''}</div>
           <div className="pane-body editor">
             <EditorPaneInner file={file} setFile={setFile} onAttach={setFileContext} openRef={editorOpenRef} project={active} onPinChanged={() => reloadProjects(activeId)} />
           </div>
         </section>
-        <section className="pane">
+        <section className="pane side" aria-label="Terminal, notes, web">
           <div className="pane-title tabs">
-            <button onClick={() => setRightTab('terminal')} className={rightTab === 'terminal' ? 'active' : ''}>Terminal</button>
-            <button onClick={() => setRightTab('notes')} className={rightTab === 'notes' ? 'active' : ''}>Notes</button>
-            <button onClick={() => setRightTab('web')} className={rightTab === 'web' ? 'active' : ''}>Web dock</button>
+            <Tabs tabs={['terminal', 'tasks', 'notes', 'web']} active={rightTab} onChange={setRightTab}
+              labels={{ terminal: 'Terminal', tasks: 'Tasks', notes: 'Notes', web: 'Web dock' }} />
           </div>
           <div className="pane-body">
             {rightTab === 'terminal' ? <TerminalPane cwd={root} />
+              : rightTab === 'tasks' ? <TasksPane />
               : rightTab === 'notes' ? (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <div style={{ padding: 6, borderBottom: '1px solid #30363d', fontSize: 12, opacity: 0.7 }}>
+                  <div className="pad" style={{ borderBottom: '1px solid var(--line)', fontSize: 12, color: 'var(--dim)' }}>
                     Project context — auto-attached to every chat in this project. Stored in <code>.codeit/CONTEXT.md</code> inside the project.
                   </div>
-                  <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Stack, conventions, goals, gotchas… e.g. React 18, Ollama default, run npm test before commit"
-                    spellCheck={false} style={{ flex: 1, background: '#0d1117', color: '#e6edf3', border: 0, padding: 10, fontSize: 13, resize: 'none' }} />
-                  <div style={{ padding: 6, borderTop: '1px solid #30363d' }}><button onClick={saveNotes} disabled={!active}>Save notes</button></div>
+                  <label className="sr-only" htmlFor="codeit-notes">Project notes</label>
+                  <textarea id="codeit-notes" className="code-area" value={notes} onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Stack, conventions, goals, gotchas…" spellCheck={false} />
+                  <div className="toolbar"><span className="spacer" /><button className="btn btn-sm btn-primary" onClick={saveNotes} disabled={!active}>Save notes</button></div>
                 </div>
               ) : <WebviewDock />}
           </div>
         </section>
       </div>
-    </div>
-  );
-}
-
-// Editor with pin-to-project support
-function EditorPaneInner(props) {
-  return <EditorPaneWithRef {...props} />;
-}
-function EditorPaneWithRef({ openRef, project, onPinChanged, ...rest }) {
-  const [file, setFile] = [rest.file, rest.setFile];
-  const [content, setContent] = useState('');
-  const [status, setStatus] = useState('');
-  useEffect(() => {
-    openRef.current = async (f) => {
-      setFile(f);
-      if (window.codeit) { try { setContent(await window.codeit.fsRead(f.path)); } catch { setContent(''); } }
-    };
-  }, []);
-  const isPinned = project?.pinned?.includes(file?.path);
-  async function save() {
-    if (!file || !window.codeit) return;
-    await window.codeit.fsWrite(file.path, content);
-    setStatus(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(() => setStatus(''), 2000);
-  }
-  async function togglePin() {
-    if (!project || !file) return;
-    if (isPinned) await window.codeit.projectsUnpin(project.id, file.path);
-    else await window.codeit.projectsPin(project.id, file.path);
-    onPinChanged?.();
-  }
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ display: 'flex', gap: 6, padding: 6, borderBottom: '1px solid #30363d', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>{file ? file.path : 'No file — pick one from explorer'}</span>
-        <span style={{ flex: 1 }} />
-        {file && <button onClick={() => rest.onAttach({ path: file.path, content })}>+File to chat</button>}
-        {file && project && <button onClick={togglePin} title="Pin: always include in project context">{isPinned ? 'Unpin' : 'Pin'}</button>}
-        {file && <button onClick={save}>Save</button>}
-        {status && <span style={{ fontSize: 12, color: '#3fb950' }}>{status}</span>}
-      </div>
-      {project?.pinned?.length > 0 && (
-        <div style={{ padding: '4px 8px', borderBottom: '1px solid #30363d', fontSize: 11, opacity: 0.8 }}>
-          📌 {project.pinned.map((p) => p.split(/[\\/]/).pop()).join(', ')}
-        </div>
+      <StatusBar project={active} git={git} toolCount={toolCount} usageTick={usageTick} zen={zen} setZen={setZen} onPalette={() => setPaletteOpen(true)} />
+      {paletteOpen && (
+        <CommandPalette onClose={() => setPaletteOpen(false)}
+          actions={[
+            { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
+            { id: 'files', label: `${filesOpen ? 'Hide' : 'Show'} files + editor`, run: () => setFilesOpen(!filesOpen) },
+            { id: 'plan', label: `${planMode ? 'Exit' : 'Enter'} plan mode`, run: () => setPlanMode(!planMode) },
+            { id: 'terminal', label: 'Open terminal tab', run: () => setRightTab('terminal') },
+            { id: 'tasks', label: 'Open background tasks', run: () => setRightTab('tasks') },
+            { id: 'notes', label: 'Open project notes', run: () => setRightTab('notes') },
+            { id: 'web', label: 'Open web dock', run: () => setRightTab('web') },
+            { id: 'ext', label: 'Open Extensions', run: () => setRailTab('extensions') },
+            { id: 'usage', label: 'Open Usage', run: () => setRailTab('usage') },
+            ...(active ? [{ id: 'reveal', label: 'Reveal project in Finder/Explorer', run: () => window.codeit?.projectsReveal(active.path) }] : []),
+          ]} />
       )}
-      <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="// open a file to edit"
-        spellCheck={false} style={{ flex: 1, background: '#0d1117', color: '#e6edf3', border: 0, padding: 10, fontFamily: 'ui-monospace,monospace', fontSize: 13, resize: 'none' }} />
     </div>
   );
 }

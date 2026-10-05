@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable } from '../llm/router.js';
+import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
 
 const WELCOME = 'CodeIT ready. Ollama default `qwen2.5-coder:7b`. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
+const PLANNER_SUFFIX = '\n\nYou are in PLAN MODE. Do not write code or call tools. Output: 1) files to touch, 2) numbered steps, 3) risks. End with "Awaiting approval — say Execute to proceed."';
 
 function chatKey(projectId) {
   return `codeit.chat.${projectId || 'default'}`;
@@ -13,10 +15,9 @@ function chatKey(projectId) {
 function newThread(provider, model, n) {
   return {
     id: `t${Date.now().toString(36)}${n}`,
-    provider,
-    model,
+    provider, model,
     msgs: [{ role: 'assistant', content: WELCOME }],
-    toolLog: [],
+    toolLog: [], scope: [], editorPath: null, lastUsage: null, planned: false,
   };
 }
 
@@ -35,11 +36,19 @@ function mcpResultToText(result) {
   } catch { return '(unreadable result)'; }
 }
 
-export default function ChatPane({ provider, model, fileContext, project, projectNotes, onToolCount }) {
+function estimate(text, model) {
+  const tokens = Math.ceil(String(text || '').length / 4);
+  const c = costUSD(model, tokens, 800);
+  return { tokens, cost: c };
+}
+
+export default function ChatPane({ provider, model, fileContext, setFileContext, project, projectNotes,
+  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor }) {
   const projectId = project?.id || 'default';
   const [threads, setThreads] = useState(() => [newThread(provider, model, 0)]);
   const [activeId, setActiveId] = useState(() => threads[0].id);
-  const [broadcast, setBroadcast] = useState(false);
+  const [selected, setSelected] = useState(() => new Set([threads[0].id]));
+  const [compare, setCompare] = useState(false);
   const [input, setInput] = useState('');
   const [busyIds, setBusyIds] = useState([]);
   const [pendings, setPendings] = useState({}); // threadId -> approval state
@@ -68,7 +77,7 @@ export default function ChatPane({ provider, model, fileContext, project, projec
           ...newThread(t.provider || provider, t.model || model, 0),
           ...t,
           msgs: Array.isArray(t.msgs) && t.msgs.length ? t.msgs : [{ role: 'assistant', content: WELCOME }],
-          toolLog: [],
+          toolLog: [], scope: Array.isArray(t.scope) ? t.scope : [],
         }));
       } else if (Array.isArray(saved) && saved.length) {
         list = [{ ...newThread(provider, model, 0), msgs: saved }];
@@ -76,10 +85,12 @@ export default function ChatPane({ provider, model, fileContext, project, projec
       if (list) {
         setThreads(list);
         setActiveId(list[0].id);
+        setSelected(new Set(list.map((t) => t.id)));
       } else {
         const fresh = [newThread(provider, model, 0)];
         setThreads(fresh);
         setActiveId(fresh[0].id);
+        setSelected(new Set([fresh[0].id]));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,7 +101,6 @@ export default function ChatPane({ provider, model, fileContext, project, projec
     (async () => {
       if (!window.codeit) return;
       const [sk, catalog] = await Promise.all([window.codeit.skillsList(), window.codeit.toolsCatalog()]);
-      setSkills(sk);
       const enabled = new Set(catalog.filter((c) => c.kind === 'skill' && c.enabled).map((c) => c.id));
       const byId = Object.fromEntries(catalog.map((c) => [c.id, c]));
       setSkills(sk.map((s) => ({ ...s, triggers: byId[s.id]?.triggers || [] })));
@@ -106,12 +116,24 @@ export default function ChatPane({ provider, model, fileContext, project, projec
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const payload = { threads: threads.map((t) => ({ id: t.id, provider: t.provider, model: t.model, msgs: t.msgs.slice(-100) })) };
+      const payload = { threads: threads.map((t) => ({ id: t.id, provider: t.provider, model: t.model, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
       if (window.codeit?.projectsSaveChat) window.codeit.projectsSaveChat(projectId, payload);
       else { try { localStorage.setItem(chatKey(projectId), JSON.stringify(payload)); } catch {} }
     }, 800);
     return () => clearTimeout(saveTimer.current);
   }, [threads, projectId]);
+
+  // thread <-> editor binding: switching threads restores that thread's file
+  useEffect(() => {
+    onThreadSwitch?.({ id: activeId, editorPath: active?.editorPath || null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+  useEffect(() => {
+    registerThreadEditor?.((path) => {
+      setThreads((cur) => cur.map((t) => (t.id === activeId ? { ...t, editorPath: path } : t)));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
 
   function addThread() {
     if (threads.length >= MAX_THREADS) return;
@@ -119,11 +141,13 @@ export default function ChatPane({ provider, model, fileContext, project, projec
     const t = newThread(provider, model, threadCount.current);
     setThreads((cur) => [...cur, t]);
     setActiveId(t.id);
+    setSelected((s) => new Set([...s, t.id]));
   }
 
   function closeThread(id) {
     if (threads.length <= 1) return;
     setThreads((cur) => cur.filter((t) => t.id !== id));
+    setSelected((s) => { const c = new Set(s); c.delete(id); return c; });
     if (activeId === id) {
       const rest = threads.filter((t) => t.id !== id);
       setActiveId(rest[rest.length - 1].id);
@@ -131,7 +155,11 @@ export default function ChatPane({ provider, model, fileContext, project, projec
   }
 
   function clearThread(id) {
-    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME }], toolLog: [] });
+    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME }], toolLog: [], planned: false, lastUsage: null });
+  }
+
+  function toggleSelect(id) {
+    setSelected((s) => { const c = new Set(s); if (c.has(id)) c.delete(id); else c.add(id); return c; });
   }
 
   function resolveApproval(threadId, decision) {
@@ -154,10 +182,28 @@ export default function ChatPane({ provider, model, fileContext, project, projec
     return mcpResultToText(r.result);
   }
 
-  async function runThread(thread, text, pinsText, sys) {
+  async function buildCtx(text) {
+    let pinsText = '';
+    const scopePaths = [...new Set([...(active.scope || []), ...(project?.pinned || [])])].slice(0, 8);
+    if (scopePaths.length && window.codeit?.fsRead) {
+      const parts = [];
+      for (const p of scopePaths) {
+        try {
+          const content = await window.codeit.fsRead(p);
+          parts.push(`--- ${p} ---\n${content.slice(0, 6000)}`);
+        } catch {}
+      }
+      pinsText = parts.join('\n\n');
+    }
+    const matched = matchSkills(skills, text, enabledSkillIds);
+    return buildSystemPrompt({ notes: projectNotes, pinsText, skills: matched });
+  }
+
+  async function runThread(thread, text, sys, opts = {}) {
     const tid = thread.id;
+    const planning = opts.planning ?? planMode;
     setBusyIds((b) => [...b, tid]);
-    patchThread(tid, { toolLog: [] });
+    patchThread(tid, { toolLog: [], planned: false });
     // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
     if (thread.provider === 'opencode') {
       const t0 = Date.now();
@@ -169,13 +215,15 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         return;
       }
       const recent = next.slice(-6).map((m) => `${m.role}: ${m.content.slice(0, 2000)}`).join('\n\n');
-      const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- PINNED ---\n${pinsText || '(none)'}\n\n--- RECENT ---\n${recent}`;
+      const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- RECENT ---\n${recent}`;
       const r = await window.codeit.opencodeRun(project?.path || '', thread.model, prompt);
       patchThread(tid, {
         msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
+        lastUsage: { prompt: 0, completion: 0, cost: 0 },
       });
       window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0 });
+      onUsageTick?.();
       setBusyIds((b) => b.filter((id) => id !== tid));
       return;
     }
@@ -199,8 +247,9 @@ export default function ChatPane({ provider, model, fileContext, project, projec
       }));
     };
     try {
-      const canUseTools = PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools && mcpTools.length > 0 && window.codeit;
-      const history = [{ role: 'system', content: sys }, ...next.map((m) => ({ role: m.role, content: m.content })).slice(-10)];
+      const sysMsg = planning ? sys + PLANNER_SUFFIX : sys;
+      const canUseTools = !planning && PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools && mcpTools.length > 0 && window.codeit;
+      const history = [{ role: 'system', content: sysMsg }, ...next.map((m) => ({ role: m.role, content: m.content })).slice(-10)];
       history[history.length - 1] = { ...history[history.length - 1], content: withFile };
       if (canUseTools) {
         if (thread.provider === 'ollama' && !ollamaToolCapable(thread.model)) {
@@ -214,11 +263,12 @@ export default function ChatPane({ provider, model, fileContext, project, projec
             : x)),
         });
       } else {
-        if (mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
+        if (!planning && mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
           push(`_Note: ${thread.provider} is text-only here — MCP tools need Ollama/Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
         }
         await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage });
       }
+      if (planning) patchThread(tid, { planned: true });
     } catch (err) {
       const hint = err.code === 'NO_KEY'
         ? String(err.message)
@@ -230,85 +280,175 @@ export default function ChatPane({ provider, model, fileContext, project, projec
         return { ...x, msgs: c };
       }));
     }
+    const cost = costUSD(thread.model, use.prompt, use.completion);
+    patchThread(tid, { lastUsage: { ...use, cost } });
     window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
+    onUsageTick?.();
     setBusyIds((b) => b.filter((id) => id !== tid));
+  }
+
+  async function runToolDirect(thread, spec) {
+    // /tool short.name {"json"} — explicit single tool call, no LLM round-trip
+    const tid = thread.id;
+    const m = spec.match(/^([\w-]+)\.([\w-]+)\s*(\{[\s\S]*\})?\s*$/);
+    if (!m) {
+      patchThread(tid, { msgs: [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: 'Usage: `/tool server.tool {"arg":…}` — e.g. `/tool memory.read_graph {}`. Servers: ' + mcpTools.map((t) => t.serverId.replace(/^mcp:/, '')).filter((v, i, a) => a.indexOf(v) === i).join(', ') }] });
+      return;
+    }
+    const [, short, name, json] = m;
+    let args = {};
+    try { args = json ? JSON.parse(json) : {}; } catch { args = {}; }
+    setBusyIds((b) => [...b, tid]);
+    const next = [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: `_Running ${short}.${name}…_` }];
+    patchThread(tid, { msgs: next });
+    const out = await executeTool(tid, { serverId: `mcp:${short}`, name, args });
+    patchThread(tid, {
+      msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\`` }],
+      toolLog: [...thread.toolLog, `⚙️ mcp:${short}.${name}`],
+    });
+    setBusyIds((b) => b.filter((id) => id !== tid));
+  }
+
+  async function executePlan(thread) {
+    const planMsg = [...thread.msgs].reverse().find((m) => m.role === 'assistant');
+    if (!planMsg) return;
+    setPlanMode(false);
+    const sys = await buildCtx(`execute approved plan for ${project?.name || 'project'}`);
+    runThread(thread, `Approved plan — execute it now, step by step:\n\n${planMsg.content.slice(0, 6000)}`, sys, { planning: false });
+  }
+
+  async function retryThread(thread) {
+    const idx = [...thread.msgs].map((m) => m.role).lastIndexOf('user');
+    if (idx < 0 || busyIds.length) return;
+    const text = thread.msgs[idx].content;
+    patchThread(thread.id, { msgs: thread.msgs.slice(0, idx), planned: false });
+    const sys = await buildCtx(text);
+    runThread({ ...thread, msgs: thread.msgs.slice(0, idx) }, text, sys);
   }
 
   async function send() {
     const text = input.trim();
     if (!text || busyIds.length) return;
-    // shared project context: pinned files + skill match (computed once per send)
-    let pinsText = '';
-    if (project?.pinned?.length && window.codeit?.fsRead) {
-      const parts = [];
-      for (const p of project.pinned.slice(0, 5)) {
-        try {
-          const content = await window.codeit.fsRead(p);
-          parts.push(`--- ${p} ---\n${content.slice(0, 6000)}`);
-        } catch {}
-      }
-      pinsText = parts.join('\n\n');
+    if (text === '/plan') { setPlanMode(!planMode); setInput(''); return; }
+    const targets = selected.size ? threads.filter((t) => selected.has(t.id)) : [active];
+    if (text.startsWith('/tool ')) {
+      setInput('');
+      await runToolDirect(active, text.slice(6).trim());
+      return;
     }
-    const matched = matchSkills(skills, text, enabledSkillIds);
-    const sys = buildSystemPrompt({ notes: projectNotes, pinsText, skills: matched });
+    const sys = await buildCtx(text);
+    // consume attached file into each target thread's scope (their own editor context)
+    if (fileContext?.path) {
+      for (const t of targets) {
+        patchThread(t.id, { scope: [...new Set([...(t.scope || []), fileContext.path])].slice(0, 20) });
+      }
+      setFileContext?.(null);
+    }
     setInput('');
-    const targets = broadcast ? threads : [active];
     for (const t of targets) {
       // eslint-disable-next-line no-await-in-loop
-      await runThread(t, text, pinsText, sys);
+      await runThread(t, text, sys);
     }
   }
 
+  function threadCost(t) {
+    if (!t.lastUsage) return null;
+    if (t.provider === 'ollama' || t.provider === 'opencode') return 'FREE';
+    if (t.lastUsage.cost == null) return null;
+    return fmtCost(t.lastUsage.cost);
+  }
+
   const busy = busyIds.length > 0;
+  const est = input.trim() ? estimate(input, active.model) : null;
+  const lastAssistant = [...active.msgs].reverse().find((m) => m.role === 'assistant');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      <div style={{ display: 'flex', gap: 4, padding: '6px 8px', borderBottom: '1px solid #30363d', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="threadbar" role="tablist" aria-label="Threads">
         {threads.map((t, i) => (
-          <span key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 2, border: t.id === activeId ? '1px solid #58a6ff' : '1px solid #30363d', borderRadius: 6, padding: '2px 4px', background: t.id === activeId ? '#1f6feb22' : 'transparent' }}>
-            <button onClick={() => setActiveId(t.id)} title={`${t.provider}/${t.model}`} style={{ fontSize: 11, border: 0, background: 'transparent' }}>
-              {i + 1}·{shortModel(t.model)}{busyIds.includes(t.id) ? '…' : ''}
+          <span key={t.id} className={`pill${t.id === activeId ? ' active' : ''}`}>
+            {threads.length > 1 && (
+              <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
+                title="Include in broadcast" aria-label={`Include thread ${i + 1} in broadcast`} />
+            )}
+            <button role="tab" aria-selected={t.id === activeId} onClick={() => setActiveId(t.id)}
+              title={`${t.provider}/${t.model}${t.lastUsage ? ` · last: ${fmtTokens(t.lastUsage.prompt + t.lastUsage.completion)}` : ''}${(t.scope || []).length ? ` · 📎${t.scope.length}` : ''}`}>
+              {i + 1}·{shortModel(t.model)}{busyIds.includes(t.id) ? '…' : ''}{(t.scope || []).length ? ` 📎${t.scope.length}` : ''}
             </button>
-            {threads.length > 1 && <button onClick={() => closeThread(t.id)} title="Close thread" style={{ fontSize: 11, border: 0, background: 'transparent' }}>×</button>}
+            {threads.length > 1 && <button onClick={() => closeThread(t.id)} title="Close thread" aria-label={`Close thread ${i + 1}`}>×</button>}
           </span>
         ))}
-        {threads.length < MAX_THREADS && <button onClick={addThread} title="New chat thread (own model)" style={{ fontSize: 12 }}>+</button>}
-        <span style={{ flex: 1 }} />
-        <label title="Send prompt to all threads" style={{ fontSize: 11, opacity: 0.8 }}>
-          <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} /> All
-        </label>
-        <button onClick={() => clearThread(activeId)} title="Clear this thread" style={{ fontSize: 12 }}>Clear</button>
+        {threads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
+        {threads.length > 1 && (
+          <button className="btn btn-sm btn-ghost" onClick={() => setCompare(!compare)} title="Compare threads side by side" aria-pressed={compare}>
+            {compare ? 'Single' : 'Compare'}
+          </button>
+        )}
+        <span className="spacer" />
+        <button className="btn btn-sm btn-ghost" onClick={() => clearThread(activeId)} title="Clear this thread">Clear</button>
       </div>
-      <div style={{ display: 'flex', gap: 6, padding: '6px 8px', borderBottom: '1px solid #30363d', alignItems: 'center' }}>
-        <select value={active.provider} onChange={(e) => {
+      <div className="thread-meta">
+        <label className="sr-only" htmlFor="thread-provider">Thread provider</label>
+        <select id="thread-provider" value={active.provider} onChange={(e) => {
           const p = PROVIDERS.find((x) => x.id === e.target.value);
           patchThread(activeId, { provider: p.id, model: p.models[0] });
         }} style={{ fontSize: 12 }}>
           {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
-        <select value={active.model} onChange={(e) => patchThread(activeId, { model: e.target.value })} style={{ fontSize: 12 }}>
+        <label className="sr-only" htmlFor="thread-model">Thread model</label>
+        <select id="thread-model" value={active.model} onChange={(e) => patchThread(activeId, { model: e.target.value })} style={{ fontSize: 12 }}>
           {PROVIDERS.find((p) => p.id === active.provider).models.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <span style={{ fontSize: 11, opacity: 0.6 }}>{project ? `Project: ${project.name}` : 'No project'}</span>
-        {mcpTools.length > 0 && <span style={{ fontSize: 11, opacity: 0.8 }}>🧰{mcpTools.length}</span>}
+        <button className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setPlanMode(!planMode)}
+          title="Plan mode: model plans, you approve, then it executes" aria-pressed={planMode}>Plan</button>
+        <span>{project ? `Project: ${project.name}` : 'No project'}</span>
+        {mcpTools.length > 0 && <span>🧰{mcpTools.length}</span>}
+        {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {active.msgs.map((m, i) => (
-          <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '92%', background: m.role === 'user' ? '#1f6feb22' : '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap', fontSize: 13 }}>
-            <div style={{ fontSize: 11, opacity: 0.6 }}>{m.role}</div>
-            {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
-          </div>
-        ))}
-        {active.toolLog.length > 0 && (
-          <div style={{ fontSize: 11, opacity: 0.75, border: '1px dashed #30363d', borderRadius: 6, padding: '4px 8px' }}>
+      <div className="messages" role="log" aria-live="polite" aria-label="Chat messages">
+        {compare && threads.length > 1 ? (
+          threads.filter((t) => selected.has(t.id)).map((t) => {
+            const last = [...t.msgs].reverse().find((m) => m.role === 'assistant');
+            return (
+              <div key={t.id} className="bubble assistant" style={{ alignSelf: 'stretch', maxWidth: '100%' }}>
+                <div className="role">{t.provider}/{t.model}{threadCost(t) ? ` · ${threadCost(t)}` : ''}</div>
+                {last ? last.content.slice(0, 2000) : '(no response yet)'}
+              </div>
+            );
+          })
+        ) : (
+          active.msgs.map((m, i) => (
+            <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
+              <div className="role">{m.role}</div>
+              {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
+            </div>
+          ))
+        )}
+        {!compare && active.toolLog.length > 0 && (
+          <div className="toollog">
             {active.toolLog.map((t, i) => <div key={i}>{t}</div>)}
           </div>
         )}
+        {!compare && !busy && lastAssistant && lastAssistant.content && lastAssistant.content !== WELCOME && (
+          <div className="row">
+            <button className="btn btn-sm btn-ghost" onClick={() => retryThread(active)} title="Re-run last prompt">↻ Retry</button>
+            {active.planned && <button className="btn btn-sm btn-primary" onClick={() => executePlan(active)} title="Approve plan and execute">▶ Execute plan</button>}
+          </div>
+        )}
       </div>
-      <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid #30363d' }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder={broadcast ? `Ask all ${threads.length} threads…` : `Ask ${active.model}…`} style={{ flex: 1 }} disabled={busy} />
-        <button onClick={send} disabled={busy}>{busy ? '…' : 'Send'}</button>
+      <div className="composer">
+        <label className="sr-only" htmlFor="codeit-chat">Chat message</label>
+        <textarea id="codeit-chat" rows={1} value={input} onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder={selected.size > 1 ? `Ask ${selected.size} threads… (/tool, /plan)` : `Ask ${active.model}… (/tool, /plan)`}
+          title="Enter sends · Shift+Enter newline · /tool runs a tool directly · /plan toggles plan mode"
+          disabled={busy} />
+        {est && (
+          <span className="estimate" title="Pre-send estimate">
+            ≈{fmtTokens(est.tokens)}{est.cost == null ? '' : active.provider === 'ollama' || active.provider === 'opencode' ? ' · FREE' : ` · ${fmtCost(est.cost)}`}
+          </span>
+        )}
+        <button className="btn btn-primary" onClick={send} disabled={busy}>{busy ? '…' : planMode ? 'Plan' : 'Send'}</button>
       </div>
       <ToolApproval pending={pendings[activeId] || null} onResolve={(d) => resolveApproval(activeId, d)} />
     </div>
