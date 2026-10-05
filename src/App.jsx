@@ -114,7 +114,7 @@ export default function App() {
           </div>
         </section>
         <section className="pane">
-          <div className="pane-title">Chat — {provider}/{model} {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
+          <div className="pane-title">Chat — multi-model {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
           <div className="pane-body"><ChatPane provider={provider} model={model} fileContext={fileContext} project={active} projectNotes={notes} onToolCount={setToolCount} /></div>
         </section>
         <section className="pane files-pane">

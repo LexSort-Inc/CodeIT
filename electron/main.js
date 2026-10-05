@@ -248,7 +248,14 @@ ipcMain.handle('projects:get-chat', async (_e, id) => {
 });
 ipcMain.handle('projects:save-chat', async (_e, id, msgs) => {
   await ensureStore();
-  await fs.writeFile(path.join(chatsDir(), `${id}.json`), JSON.stringify((msgs || []).slice(-100), null, 2));
+  // msgs: legacy array, or { threads: [{ id, provider, model, msgs }] }
+  let payload = msgs;
+  if (payload && typeof payload === 'object' && Array.isArray(payload.threads)) {
+    payload = { threads: payload.threads.slice(0, 4).map((t) => ({ ...t, msgs: (t.msgs || []).slice(-100) })) };
+  } else {
+    payload = (Array.isArray(payload) ? payload : []).slice(-100);
+  }
+  await fs.writeFile(path.join(chatsDir(), `${id}.json`), JSON.stringify(payload, null, 2));
   return true;
 });
 
