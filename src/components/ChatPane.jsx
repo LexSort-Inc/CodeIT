@@ -13,12 +13,19 @@ function chatKey(projectId) {
 }
 
 function newThread(provider, model, n) {
+  const now = new Date().toISOString();
   return {
     id: `t${Date.now().toString(36)}${n}`,
-    provider, model,
+    provider, model, title: 'New chat',
+    createdAt: now, updatedAt: now, archived: false,
     msgs: [{ role: 'assistant', content: WELCOME }],
     toolLog: [], scope: [], editorPath: null, lastUsage: null, planned: false,
   };
+}
+
+function threadTitle(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s ? s.slice(0, 44) : 'New chat';
 }
 
 function shortModel(m) {
@@ -59,7 +66,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const approvalResolve = useRef({});
   const threadCount = useRef(0);
 
-  const active = threads.find((t) => t.id === activeId) || threads[0];
+  const openThreads = threads.filter((t) => !t.archived);
+  const active = openThreads.find((t) => t.id === activeId) || openThreads[0] || threads[0];
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyQ, setHistoryQ] = useState('');
 
   function patchThread(id, patch) {
     setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -73,19 +83,27 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       else { try { saved = JSON.parse(localStorage.getItem(chatKey(projectId))); } catch { saved = null; } }
       let list = null;
       if (saved && Array.isArray(saved.threads) && saved.threads.length) {
-        list = saved.threads.slice(0, MAX_THREADS).map((t) => ({
-          ...newThread(t.provider || provider, t.model || model, 0),
-          ...t,
+        const fresh = (t) => ({ ...newThread(t.provider || provider, t.model || model, 0), ...t });
+        const open = saved.threads.filter((t) => !t.archived).slice(0, MAX_THREADS).map((t) => ({
+          ...fresh(t),
           msgs: Array.isArray(t.msgs) && t.msgs.length ? t.msgs : [{ role: 'assistant', content: WELCOME }],
           toolLog: [], scope: Array.isArray(t.scope) ? t.scope : [],
         }));
+        const archived = saved.threads.filter((t) => t.archived).slice(0, 50).map((t) => ({
+          ...fresh(t),
+          msgs: Array.isArray(t.msgs) ? t.msgs.slice(-100) : [{ role: 'assistant', content: WELCOME }],
+          toolLog: [], scope: Array.isArray(t.scope) ? t.scope : [],
+        }));
+        list = [...open, ...archived];
+        if (!open.length && archived.length) list[0].archived = false;
+        if (!list.length) list = null;
       } else if (Array.isArray(saved) && saved.length) {
         list = [{ ...newThread(provider, model, 0), msgs: saved }];
       }
       if (list) {
         setThreads(list);
         setActiveId(list[0].id);
-        setSelected(new Set(list.map((t) => t.id)));
+        setSelected(new Set(list.filter((t) => !t.archived).map((t) => t.id)));
       } else {
         const fresh = [newThread(provider, model, 0)];
         setThreads(fresh);
@@ -116,7 +134,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const payload = { threads: threads.map((t) => ({ id: t.id, provider: t.provider, model: t.model, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
+      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
       if (window.codeit?.projectsSaveChat) window.codeit.projectsSaveChat(projectId, payload);
       else { try { localStorage.setItem(chatKey(projectId), JSON.stringify(payload)); } catch {} }
     }, 800);
@@ -136,7 +154,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   }, [activeId]);
 
   function addThread() {
-    if (threads.length >= MAX_THREADS) return;
+    if (openThreads.length >= MAX_THREADS) return;
     threadCount.current += 1;
     const t = newThread(provider, model, threadCount.current);
     setThreads((cur) => [...cur, t]);
@@ -144,13 +162,40 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     setSelected((s) => new Set([...s, t.id]));
   }
 
-  function closeThread(id) {
-    if (threads.length <= 1) return;
+  function archiveThread(id) {
+    if (openThreads.length <= 1) return;
+    const now = new Date().toISOString();
+    setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, archived: true, updatedAt: now } : t)));
+    setSelected((s) => { const c = new Set(s); c.delete(id); return c; });
+    if (activeId === id) {
+      const rest = openThreads.filter((t) => t.id !== id);
+      if (rest.length) setActiveId(rest[rest.length - 1].id);
+    }
+  }
+
+  function restoreThread(id) {
+    // unarchive, then cap open tabs at MAX by re-archiving stalest (never the restored one)
+    setThreads((cur) => {
+      const next = cur.map((t) => (t.id === id ? { ...t, archived: false, updatedAt: new Date().toISOString() } : t));
+      const open = next.filter((t) => !t.archived).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      if (open.length <= MAX_THREADS) return next;
+      const drop = new Set(open.slice(MAX_THREADS).map((t) => t.id));
+      drop.delete(id);
+      // if still over (all others newer — impossible since restored is newest), drop oldest anyway
+      if (open.length - drop.size > MAX_THREADS) drop.add(open[open.length - 1].id);
+      return next.map((t) => (drop.has(t.id) ? { ...t, archived: true } : t));
+    });
+    setSelected((s) => new Set([...s, id]));
+    setActiveId(id);
+  }
+
+  function deleteThread(id) {
+    if (threads.filter((t) => !t.archived).length <= 1 && !threads.find((t) => t.id === id)?.archived) return;
     setThreads((cur) => cur.filter((t) => t.id !== id));
     setSelected((s) => { const c = new Set(s); c.delete(id); return c; });
     if (activeId === id) {
-      const rest = threads.filter((t) => t.id !== id);
-      setActiveId(rest[rest.length - 1].id);
+      const rest = openThreads.filter((t) => t.id !== id);
+      if (rest.length) setActiveId(rest[rest.length - 1].id);
     }
   }
 
@@ -202,6 +247,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   async function runThread(thread, text, sys, opts = {}) {
     const tid = thread.id;
     const planning = opts.planning ?? planMode;
+    patchThread(tid, {
+      updatedAt: new Date().toISOString(),
+      ...(thread.title === 'New chat' ? { title: threadTitle(text) } : null),
+    });
     setBusyIds((b) => [...b, tid]);
     patchThread(tid, { toolLog: [], planned: false });
     // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
@@ -330,7 +379,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     const text = input.trim();
     if (!text || busyIds.length) return;
     if (text === '/plan') { setPlanMode(!planMode); setInput(''); return; }
-    const targets = selected.size ? threads.filter((t) => selected.has(t.id)) : [active];
+    const targets = selected.size ? openThreads.filter((t) => selected.has(t.id)) : [active];
+    if (!targets.length) return;
     if (text.startsWith('/tool ')) {
       setInput('');
       await runToolDirect(active, text.slice(6).trim());
@@ -365,28 +415,49 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       <div className="threadbar" role="tablist" aria-label="Threads">
-        {threads.map((t, i) => (
+        {openThreads.map((t, i) => (
           <span key={t.id} className={`pill${t.id === activeId ? ' active' : ''}`}>
-            {threads.length > 1 && (
+            {openThreads.length > 1 && (
               <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
                 title="Include in broadcast" aria-label={`Include thread ${i + 1} in broadcast`} />
             )}
             <button role="tab" aria-selected={t.id === activeId} onClick={() => setActiveId(t.id)}
-              title={`${t.provider}/${t.model}${t.lastUsage ? ` · last: ${fmtTokens(t.lastUsage.prompt + t.lastUsage.completion)}` : ''}${(t.scope || []).length ? ` · 📎${t.scope.length}` : ''}`}>
+              title={`${t.title || 'New chat'} · ${t.provider}/${t.model}${t.lastUsage ? ` · last: ${fmtTokens(t.lastUsage.prompt + t.lastUsage.completion)}` : ''}${(t.scope || []).length ? ` · 📎${t.scope.length}` : ''}`}>
               {i + 1}·{shortModel(t.model)}{busyIds.includes(t.id) ? '…' : ''}{(t.scope || []).length ? ` 📎${t.scope.length}` : ''}
             </button>
-            {threads.length > 1 && <button onClick={() => closeThread(t.id)} title="Close thread" aria-label={`Close thread ${i + 1}`}>×</button>}
+            {openThreads.length > 1 && <button onClick={() => archiveThread(t.id)} title="Archive thread (kept in History)" aria-label={`Archive thread ${i + 1}`}>×</button>}
           </span>
         ))}
-        {threads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
-        {threads.length > 1 && (
+        {openThreads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
+        {openThreads.length > 1 && (
           <button className="btn btn-sm btn-ghost" onClick={() => setCompare(!compare)} title="Compare threads side by side" aria-pressed={compare}>
             {compare ? 'Single' : 'Compare'}
           </button>
         )}
         <span className="spacer" />
+        <button className="btn btn-sm btn-ghost" onClick={() => setShowHistory(!showHistory)} title="Chat history for this project" aria-pressed={showHistory}>History</button>
         <button className="btn btn-sm btn-ghost" onClick={() => clearThread(activeId)} title="Clear this thread">Clear</button>
       </div>
+      {showHistory && (
+        <div style={{ borderBottom: '1px solid #30363d', padding: 8, display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '45%', overflowY: 'auto' }}>
+          <input value={historyQ} onChange={(e) => setHistoryQ(e.target.value)} placeholder="Search chats…" style={{ fontSize: 12 }} />
+          {threads
+            .filter((t) => !historyQ.trim() || `${t.title || ''} ${t.model} ${t.provider}`.toLowerCase().includes(historyQ.trim().toLowerCase()))
+            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+            .map((t) => (
+              <div key={t.id} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: t.archived ? 0.6 : 1 }}
+                  title={`${t.provider}/${t.model} · ${(t.msgs || []).length} msgs`}>
+                  {t.archived ? '📦 ' : '💬 '}{t.title || 'New chat'} <span style={{ opacity: 0.6 }}>· {t.provider}/{shortModel(t.model)}</span>
+                </span>
+                {!t.archived
+                  ? <button className="btn btn-sm btn-ghost" onClick={() => { setActiveId(t.id); setShowHistory(false); }}>Open</button>
+                  : <button className="btn btn-sm btn-ghost" onClick={() => restoreThread(t.id)}>Restore</button>}
+                <button className="btn btn-sm btn-ghost" onClick={() => deleteThread(t.id)} title="Delete forever">✕</button>
+              </div>
+            ))}
+        </div>
+      )}
       <div className="thread-meta">
         <label className="sr-only" htmlFor="thread-provider">Thread provider</label>
         <select id="thread-provider" value={active.provider} onChange={(e) => {
@@ -406,8 +477,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
       </div>
       <div className="messages" role="log" aria-live="polite" aria-label="Chat messages">
-        {compare && threads.length > 1 ? (
-          threads.filter((t) => selected.has(t.id)).map((t) => {
+        {compare && openThreads.length > 1 ? (
+          openThreads.filter((t) => selected.has(t.id)).map((t) => {
             const last = [...t.msgs].reverse().find((m) => m.role === 'assistant');
             return (
               <div key={t.id} className="bubble assistant" style={{ alignSelf: 'stretch', maxWidth: '100%' }}>
