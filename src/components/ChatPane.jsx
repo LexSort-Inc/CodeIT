@@ -35,6 +35,44 @@ function shortModel(m) {
   return s.length > 22 ? s.slice(0, 21) + '…' : s;
 }
 
+// One compare column: full thread + its own composer (independent sends).
+function CompareCol({ thread: t, busy, cost, onSend }) {
+  const [draft, setDraft] = useState('');
+  function go() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft('');
+    onSend(text);
+  }
+  return (
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8, borderRight: '1px solid #30363d', paddingRight: 8, minHeight: 0 }}>
+      <div style={{ fontSize: 12, fontWeight: 600 }}>
+        {t.provider}/{shortModel(t.model)}{cost ? ` · ${cost}` : ''}{busy ? ' …' : ''}
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+        {t.msgs.map((m, i) => (
+          <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`} style={{ maxWidth: '100%' }}>
+            <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
+            {m.content || (busy && i === t.msgs.length - 1 ? '…' : '')}
+          </div>
+        ))}
+        {t.toolLog.length > 0 && (
+          <div className="toollog">
+            {t.toolLog.map((x, i) => <div key={i}>{x}</div>)}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } }}
+          placeholder={`Ask ${shortModel(t.model)}…`} aria-label={`Message ${t.model}`}
+          style={{ flex: 1, fontSize: 12 }} disabled={busy} />
+        <button className="btn btn-sm btn-primary" onClick={go} disabled={busy || !draft.trim()}>{busy ? '…' : 'Send'}</button>
+      </div>
+    </div>
+  );
+}
+
 function mcpResultToText(result) {
   if (!result) return '(empty result)';
   if (typeof result === 'string') return result;
@@ -75,7 +113,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const [historyQ, setHistoryQ] = useState('');
 
   function patchThread(id, patch) {
-    setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    // normalize provider on every write: labels must never persist (they break
+    // engine branching + key lookup, which key off provider ids)
+    const p = patch.provider ? { provider: canonProvider(patch.provider) || patch.provider } : null;
+    setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, ...patch, ...p } : t)));
   }
 
   // load per-project threads (migrates legacy single-array history)
@@ -270,7 +311,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     setBusyIds((b) => [...b, tid]);
     patchThread(tid, { toolLog: [], planned: false });
     // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
-    if (thread.provider === 'opencode') {
+    if (canonProvider(thread.provider) === 'opencode') {
       const t0 = Date.now();
       const next = [...thread.msgs, { role: 'user', content: text }];
       patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running in project dir…_' }] });
@@ -413,6 +454,15 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     runThread({ ...thread, msgs: thread.msgs.slice(0, idx) }, text, sys);
   }
 
+  // single-thread send (per-column composers in compare view)
+  async function sendToThread(tid, text) {
+    const t = threads.find((x) => x.id === tid);
+    const clean = String(text || '').trim();
+    if (!t || !clean || busyIds.includes(tid)) return;
+    const sys = await buildCtx(clean, t);
+    await runThread(t, clean, sys);
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || busyIds.length) return;
@@ -547,22 +597,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       <div className="messages" role="log" aria-live="polite" aria-label="Chat messages" style={compare && compareThreads.length > 1 ? { flexDirection: 'row', gap: 8 } : undefined}>
         {compare && compareThreads.length > 1 ? (
           compareThreads.map((t) => (
-            <div key={t.id} style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, borderRight: '1px solid #30363d', paddingRight: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, position: 'sticky', top: 0, background: '#0d1117', padding: '2px 0' }}>
-                {t.provider}/{shortModel(t.model)}{threadCost(t) ? ` · ${threadCost(t)}` : ''}{busyIds.includes(t.id) ? ' …' : ''}
-              </div>
-              {t.msgs.map((m, i) => (
-                <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`} style={{ maxWidth: '100%' }}>
-                  <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
-                  {m.content || (busyIds.includes(t.id) && i === t.msgs.length - 1 ? '…' : '')}
-                </div>
-              ))}
-              {t.toolLog.length > 0 && (
-                <div className="toollog">
-                  {t.toolLog.map((x, i) => <div key={i}>{x}</div>)}
-                </div>
-              )}
-            </div>
+            <CompareCol key={t.id} thread={t} busy={busyIds.includes(t.id)}
+              cost={threadCost(t)} onSend={(text) => sendToThread(t.id, text)} />
           ))
         ) : (
           active.msgs.map((m, i) => (

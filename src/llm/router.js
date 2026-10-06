@@ -99,18 +99,18 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage, 
     return;
   }
 
+  if (provider === 'opencode') {
+    const e = new Error('OpenCode runs via the agent runner, not streaming chat — use a thread with the OpenCode engine.');
+    e.code = 'OPENCODE_ENGINE';
+    throw e;
+  }
+
   const keys = await getKeys();
   const key = keys[provider];
   if (!key) {
     const saved = Object.keys(keys).filter((k) => keys[k]);
     const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to Ollama.`);
     e.code = 'NO_KEY';
-    throw e;
-  }
-
-  if (provider === 'opencode') {
-    const e = new Error('OpenCode runs via the agent runner, not streaming chat — use a thread with the OpenCode engine.');
-    e.code = 'OPENCODE_ENGINE';
     throw e;
   }
 
