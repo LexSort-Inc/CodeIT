@@ -369,8 +369,9 @@ ipcMain.handle('usage:get', async () => {
   const byKey = {};
   for (const e of d.events) {
     const k = `${e.provider || '?'}|${e.model || '?'}`;
-    const b = byKey[k] || (byKey[k] = { provider: e.provider, model: e.model, calls: 0, prompt: 0, completion: 0, ms: 0 });
+    const b = byKey[k] || (byKey[k] = { provider: e.provider, model: e.model, calls: 0, okCalls: 0, prompt: 0, completion: 0, ms: 0 });
     b.calls += 1;
+    if (e.ok) b.okCalls += 1;
     b.prompt += e.prompt || 0;
     b.completion += e.completion || 0;
     b.ms += e.ms || 0;

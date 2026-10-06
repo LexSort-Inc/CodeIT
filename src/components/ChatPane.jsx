@@ -286,7 +286,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}`, via: `opencode/${thread.model}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
       });
-      window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0 });
+      window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0, ok: r.ok });
       onUsageTick?.();
       setBusyIds((b) => b.filter((id) => id !== tid));
       return;
@@ -311,6 +311,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         return { ...x, msgs: c };
       }));
     };
+    let succeeded = true;
     try {
       const sysMsg = planning ? sys + PLANNER_SUFFIX : sys;
       const canUseTools = !planning && PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools && mcpTools.length > 0 && window.codeit;
@@ -335,6 +336,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
+      succeeded = false;
       const streak = (thread.errStreak || 0) + 1;
       patchThread(tid, { errStreak: streak });
       const streakMsg = streak >= 2 ? `\n\n_Failed ${streak}x in a row on this model — pick another from the menu above or fix billing/keys, then resend._` : '';
@@ -345,7 +347,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
           c[c.length - 1] = { role: 'assistant', content: acc ? acc + '\n\n_Stopped._' : '_Stopped._', via };
           return { ...x, msgs: c };
         }));
-        window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
+        window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion, ok: false });
         onUsageTick?.();
         setBusyIds((b) => b.filter((id) => id !== tid));
         return;
@@ -365,8 +367,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }));
     }
     const cost = costUSD(thread.model, use.prompt, use.completion);
-    patchThread(tid, { lastUsage: { ...use, cost }, errStreak: 0 });
-    window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
+    if (succeeded) patchThread(tid, { errStreak: 0 });
+    patchThread(tid, { lastUsage: { ...use, cost } });
+    window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion, ok: succeeded });
     onUsageTick?.();
     setBusyIds((b) => b.filter((id) => id !== tid));
   }
@@ -482,21 +485,6 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       setSelected(new Set(openThreads.map((t) => t.id)));
     }
     setCompare(true);
-  }
-
-  if (!project) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>No project selected</div>
-        <div style={{ fontSize: 13, opacity: 0.7, maxWidth: 340 }}>
-          Chats live inside projects. Add a local folder with <strong>+ Folder</strong> or clone a repo
-          with <strong>+ GitHub</strong> in the Projects rail to start chatting.
-        </div>
-        <div style={{ fontSize: 12, opacity: 0.6, maxWidth: 340 }}>
-          Cloud models need their key first — open <strong>Keys</strong> in the top bar. Ollama works with no key.
-        </div>
-      </div>
-    );
   }
 
   const compareThreads = openThreads.filter((t) => selected.has(t.id));

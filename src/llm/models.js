@@ -124,15 +124,20 @@ export function allModels(includeDead = false) {
   return out;
 }
 
-// Split for the two-section picker: ready now vs needs a key first.
-export function splitReady(models, savedKeys) {
+// Split for the three-section picker. `verified` is a Set of 'provider/model'
+// with at least one successful call (observed truth, not claims):
+// working = local models + proven calls; ready = key saved but untested;
+// needsKey = no key yet.
+export function splitReady(models, savedKeys, verified) {
+  const working = [];
   const ready = [];
   const needsKey = [];
   for (const m of models) {
-    if (!m.needsKey || savedKeys[m.keyId]) ready.push(m);
+    if (m.local || (verified && verified.has(`${m.provider}/${m.model}`))) working.push(m);
+    else if (!m.needsKey || savedKeys[m.keyId]) ready.push(m);
     else needsKey.push(m);
   }
-  return { ready, needsKey };
+  return { working, ready, needsKey };
 }
 
 export function fmtContext(n) {

@@ -23,9 +23,18 @@ export default function ModelPicker({ provider, model, onPick }) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState('');
   const [savedKeys, setSavedKeys] = useState({});
+  const [verified, setVerified] = useState(new Set());
   const inputRef = useRef(null);
 
-  useEffect(() => { if (open) getKeys().then(setSavedKeys).catch(() => {}); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    getKeys().then(setSavedKeys).catch(() => {});
+    window.codeit?.usageGet?.().then((u) => {
+      const s = new Set();
+      for (const e of u?.events || []) if (e.ok) s.add(`${e.provider}/${e.model}`);
+      setVerified(s);
+    }).catch(() => {});
+  }, [open]);
 
   async function refreshLive() {
     setRefreshing(true);
@@ -71,6 +80,7 @@ export default function ModelPicker({ provider, model, onPick }) {
         onMouseEnter={() => setIdx(i)} onClick={() => pick(m)}
         style={{ display: 'flex', gap: 6, width: '100%', textAlign: 'left', fontSize: 12, padding: '5px 8px', border: 0, borderRadius: 0, background: i === idx ? '#1f6feb33' : 'transparent', color: 'inherit', cursor: 'pointer', opacity: showDead && m.dead ? 0.55 : 1 }}>
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.agent ? '🤖 OpenCode agent' : m.model}</span>
+        {!showDead && verified.has(`${m.provider}/${m.model}`) && <span title="Answered successfully before" style={{ color: '#3fb950', fontSize: 11 }}>✓</span>}
         {m.tier === 'local' && <span className="k" title="Runs on this machine — no key, no cost">Local</span>}
         {m.tier === 'free' && <span className="k" title="Free tier — needs key, no card">Free</span>}
         {m.tier === 'paid' && <span className="k" title="Paid — needs billing on the provider">Paid</span>}
@@ -88,8 +98,10 @@ export default function ModelPicker({ provider, model, onPick }) {
     const s = q.trim().toLowerCase();
     return !s || `${m.model} ${m.provider}`.toLowerCase().includes(s);
   }) : items;
-  const { ready, needsKey } = showDead ? { ready: visible, needsKey: [] } : splitReady(visible, savedKeys);
-  const flat = showDead ? visible : [...ready, ...needsKey];
+  const { working, ready, needsKey } = showDead
+    ? { working: visible, ready: [], needsKey: [] }
+    : splitReady(visible, savedKeys, verified);
+  const flat = showDead ? visible : [...working, ...ready, ...needsKey];
   const sel = flat[idx] ?? items[idx];
   return (
     <div style={{ position: 'relative' }}>
@@ -109,7 +121,9 @@ export default function ModelPicker({ provider, model, onPick }) {
               </div>
               {(refreshing || refreshMsg) && <div className="muted" style={{ fontSize: 11, padding: '0 8px 4px' }}>{refreshing ? 'Refreshing…' : refreshMsg}</div>}
               <div style={{ overflowY: 'auto', flex: 1 }} onKeyDown={onKey}>
-                {!showDead && ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready now</div>}
+                {!showDead && working.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>✓ Verified working</div>}
+                {!showDead && working.map(row)}
+                {!showDead && ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready — untested</div>}
                 {!showDead && ready.map(row)}
                 {!showDead && needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
                 {!showDead && needsKey.map(row)}
