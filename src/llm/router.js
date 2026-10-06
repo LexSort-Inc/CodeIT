@@ -327,6 +327,29 @@ async function streamFinal({ provider, model, key, convo, onChunk, onUsage, sign
   await parseOpenAI(res2, onChunk, onUsage);
 }
 
+// Key check: minimal live call per provider. Chat providers send 'hi' to the
+// first model; Brave runs a count=1 search (costs 1 query). Never throws.
+export async function testProviderKey(providerId) {
+  const id = canonProvider(providerId);
+  try {
+    if (id === 'brave') {
+      const keys = await getKeys();
+      if (!keys.brave) return { ok: false, error: 'No key saved.' };
+      const res = await fetch('https://api.search.brave.com/res/v1/web/search?q=ok&count=1', {
+        headers: { 'X-Subscription-Token': keys.brave },
+      });
+      if (!res.ok) return { ok: false, error: `Brave ${res.status}: ${(await res.text()).slice(0, 120)}` };
+      return { ok: true, detail: 'Search API answered.' };
+    }
+    const p = PROVIDERS.find((x) => x.id === id);
+    if (!p) return { ok: false, error: `Unknown provider ${id}.` };
+    await streamChat({ provider: id, model: p.models[0], messages: [{ role: 'user', content: 'hi' }], onChunk: () => {} });
+    return { ok: true, detail: `${p.models[0]} answered.` };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err).slice(0, 160) };
+  }
+}
+
 // Live model lists: providers that expose one. Results cached by the picker.
 export async function refreshProviderModels(providerId) {
   const id = canonProvider(providerId);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PROVIDERS, getKeys, setKey } from '../llm/router.js';
+import { PROVIDERS, getKeys, setKey, testProviderKey } from '../llm/router.js';
 import { KEY_LINKS } from '../llm/models.js';
 
 const KEY_FIELDS = [
@@ -16,6 +16,13 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
   const [keys, setKeysState] = useState({});
   const [show, setShow] = useState(false);
   const [secured, setSecured] = useState(false);
+  const [tests, setTests] = useState({}); // id -> { phase, msg }
+
+  async function testKey(id) {
+    setTests((t) => ({ ...t, [id]: { phase: 'testing', msg: 'testing…' } }));
+    const r = await testProviderKey(id);
+    setTests((t) => ({ ...t, [id]: r.ok ? { phase: 'ok', msg: `✓ ${r.detail}` } : { phase: 'err', msg: r.error } }));
+  }
   useEffect(() => {
     getKeys().then((k) => {
       setKeysState(k);
@@ -53,6 +60,16 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
               {KEY_LINKS[f.id] && (
                 <a href={KEY_LINKS[f.id].url} target="_blank" rel="noreferrer" title={`Get ${f.label} key — ${KEY_LINKS[f.id].note}`}
                   style={{ fontSize: 11, marginLeft: 4 }}>Get key ⧉</a>
+              )}
+              <button className="btn btn-sm btn-ghost" style={{ marginLeft: 4 }} disabled={!keys[f.id] || tests[f.id]?.phase === 'testing'}
+                onClick={() => testKey(f.id)} title={`Send a minimal live call to verify the ${f.label} key`}>
+                {tests[f.id]?.phase === 'testing' ? '…' : 'Test'}
+              </button>
+              {tests[f.id] && tests[f.id].phase !== 'testing' && (
+                <span style={{ fontSize: 11, marginLeft: 4, color: tests[f.id].phase === 'ok' ? '#3fb950' : '#f85149' }}
+                  title={tests[f.id].phase === 'ok' ? tests[f.id].msg : tests[f.id].msg}>
+                  {tests[f.id].phase === 'ok' ? tests[f.id].msg : `✕ ${tests[f.id].msg.slice(0, 90)}`}
+                </span>
               )}
             </label>
           ))}
