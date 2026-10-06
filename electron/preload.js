@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('codeit', {
   toolsCall: (serverId, tool, args, approved) => ipcRenderer.invoke('tools:call', serverId, tool, args, approved),
   toolsServerTools: (serverId) => ipcRenderer.invoke('tools:server-tools', serverId),
   skillsList: () => ipcRenderer.invoke('skills:list'),
+  buildInfo: () => ipcRenderer.invoke('app:buildinfo'),
   usageRecord: (ev) => ipcRenderer.invoke('usage:record', ev),
   usageGet: () => ipcRenderer.invoke('usage:get'),
   usageReset: () => ipcRenderer.invoke('usage:reset')

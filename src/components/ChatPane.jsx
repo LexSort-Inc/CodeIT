@@ -510,6 +510,11 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
           </div>
         )}
       </div>
+      {planMode && (
+        <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d', fontSize: 12, background: '#1f6feb22' }}>
+          📋 <strong>PLAN MODE</strong> — the model will plan only, no tools, no edits. Review the plan, then press <strong>▶ Execute plan</strong> (or toggle Plan off to chat normally).
+        </div>
+      )}
       <div className="composer">
         <label className="sr-only" htmlFor="codeit-chat">Chat message</label>
         <textarea id="codeit-chat" rows={1} value={input} onChange={(e) => setInput(e.target.value)}

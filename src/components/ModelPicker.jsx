@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { allModels, fmtContext } from '../llm/models.js';
+import { allModels } from '../llm/models.js';
 
 // Per-thread model menu: searchable, grouped, with a fact panel
 // (provider / inputs / reasoning / context) like OpenCode Zen's picker.
+const VEIL = { position: 'fixed', inset: 0, zIndex: 60 };
+const MENU = {
+  position: 'absolute', zIndex: 61, top: '110%', left: 0, display: 'flex',
+  background: 'var(--bg1, #161b22)', border: '1px solid var(--line, #30363d)',
+  borderRadius: 8, overflow: 'hidden', boxShadow: '0 8px 32px #000a',
+};
+const ROW = {
+  display: 'flex', gap: 6, width: '100%', textAlign: 'left', fontSize: 12,
+  padding: '5px 8px', border: 0, borderRadius: 0, background: 'transparent',
+  color: 'inherit', cursor: 'pointer',
+};
+
 export default function ModelPicker({ provider, model, onPick }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -14,8 +26,8 @@ export default function ModelPicker({ provider, model, onPick }) {
     return !s || `${m.model} ${m.provider}`.toLowerCase().includes(s);
   });
 
-  useEffect(() => { if (open) { setQ(''); setIdx(0); setTimeout(() => inputRef.current?.focus(), 0); } }, [open ]);
-  useEffect(() => { setIdx(0); }, [q ]);
+  useEffect(() => { if (open) { setQ(''); setIdx(0); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
+  useEffect(() => { setIdx(0); }, [q]);
 
   function pick(m) {
     if (!m) return;
@@ -32,15 +44,14 @@ export default function ModelPicker({ provider, model, onPick }) {
 
   const sel = items[idx];
   return (
-    <span style={{ position: 'relative' }}>
-      <button className="btn btn-sm" onClick={() => setOpen(!open)} title={`${provider}/${model} — pick model`} aria-haspopup="listbox" aria-expanded={open}>
+    <div style={{ position: 'relative' }}>
+      <button className="btn btn-sm" onClick={() => setOpen(!open)} title={`${provider}/${model} — pick model for this thread`} aria-haspopup="listbox" aria-expanded={open}>
         {provider === 'opencode' ? '🤖 ' : ''}{String(model).length > 24 ? String(model).slice(0, 23) + '…' : model} ▾
       </button>
       {open && (
-        <span>
-          <span className="palette-veil" style={{ position: 'fixed', inset: 0, zIndex: 40 }} onMouseDown={() => setOpen(false)} />
-          <div role="listbox" aria-label="Pick model"
-            style={{ position: 'absolute', zIndex: 41, top: '110%', left: 0, display: 'flex', gap: 0, background: 'var(--bg1, #161b22)', border: '1px solid var(--line, #30363d)', borderRadius: 8, overflow: 'hidden', boxShadow: '0 8px 32px #000a' }}>
+        <>
+          <div style={VEIL} onMouseDown={() => setOpen(false)} />
+          <div role="listbox" aria-label="Pick model" style={MENU}>
             <div style={{ width: 250, display: 'flex', flexDirection: 'column', maxHeight: 320 }}>
               <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
                 placeholder="Search models" aria-label="Search models" style={{ margin: 6 }} />
@@ -48,7 +59,7 @@ export default function ModelPicker({ provider, model, onPick }) {
                 {items.map((m, i) => (
                   <button key={`${m.provider}/${m.model}`} role="option" aria-selected={i === idx}
                     onMouseEnter={() => setIdx(i)} onClick={() => pick(m)}
-                    style={{ display: 'flex', gap: 6, width: '100%', textAlign: 'left', fontSize: 12, padding: '5px 8px', border: 0, borderRadius: 0, background: i === idx ? '#1f6feb33' : 'transparent', color: 'inherit' }}>
+                    style={{ ...ROW, background: i === idx ? '#1f6feb33' : 'transparent' }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.agent ? '🤖 OpenCode agent' : m.model}</span>
                     {m.local && <span className="k">Local</span>}
                     {m.free && !m.local && <span className="k">Free</span>}
@@ -66,13 +77,13 @@ export default function ModelPicker({ provider, model, onPick }) {
                   <div><div className="muted">Reasoning</div>{sel.reasoning ? 'Allows reasoning' : '—'}</div>
                   <div><div className="muted">Context</div>{sel.context == null ? 'varies' : sel.context.toLocaleString()}</div>
                   <div><div className="muted">Tools</div>{sel.tools ? (sel.agent ? 'agent tools' : 'MCP tools') : 'text-only'}</div>
-                  <div><div className="muted">Key</div>{sel.local ? 'none (local)' : sel.agent ? 'opencode auth' : 'API key'}</div>
+                  <div><div className="muted">Key</div>{sel.local ? 'none (local)' : sel.agent ? 'opencode auth' : 'API key in Keys'}</div>
                 </div>
               ) : <span className="muted">Pick a model</span>}
             </div>
           </div>
-        </span>
+        </>
       )}
-    </span>
+    </div>
   );
 }

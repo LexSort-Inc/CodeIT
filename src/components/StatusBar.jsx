@@ -4,6 +4,8 @@ import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 // Status whisper: branch + tools + session totals. Local-only sessions show FREE.
 export default function StatusBar({ project, git, toolCount, usageTick, zen, setZen, onPalette }) {
   const [totals, setTotals] = useState({ calls: 0, prompt: 0, completion: 0, cost: 0, known: true, localOnly: true });
+  const [build, setBuild] = useState(null);
+  useEffect(() => { window.codeit?.buildInfo?.().then(setBuild).catch(() => {}); }, []);
   useEffect(() => {
     (async () => {
       if (!window.codeit?.usageGet) return;
@@ -33,6 +35,7 @@ export default function StatusBar({ project, git, toolCount, usageTick, zen, set
           {fmtTokens(totals.prompt + totals.completion)} · {totals.localOnly ? <span className="free">LOCAL · FREE</span> : `${fmtCost(totals.cost)}${totals.known ? '' : '+'}`}
         </span>
       )}
+      {build && <span title={`Built ${build.date || 'unknown date'} — match this to the installer before reporting issues`}>v{build.version}·{build.commit}</span>}
       <button className="btn btn-ghost btn-sm" onClick={onPalette} title="Command palette (⌘K)">⌘K</button>
       <button className="btn btn-ghost btn-sm" onClick={() => setZen(!zen)} title="Toggle zen mode">{zen ? 'Exit zen' : 'Zen'}</button>
     </footer>

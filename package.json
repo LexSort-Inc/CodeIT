@@ -7,7 +7,7 @@
     "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "vite": "vite",
     "electron": "electron .",
-    "build": "vite build",
+    "build": "node scripts/write-build-info.mjs && vite build",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "postinstall": "electron-builder install-app-deps || true"

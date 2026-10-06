@@ -389,6 +389,16 @@ ipcMain.handle('chats:search', async (_e, q) => {
   return out.slice(0, 30);
 });
 
+// ---------- Build stamp: which commit is this packaged app built from? ----------
+ipcMain.handle('app:buildinfo', async () => {
+  try {
+    const raw = await fs.readFile(path.join(__dirname, '..', 'dist', 'build-info.json'), 'utf8');
+    return { ...JSON.parse(raw), version: app.getVersion() };
+  } catch {
+    return { commit: 'dev', date: null, version: app.getVersion() };
+  }
+});
+
 // ---------- IPC: git info for active project ----------
 function sh(cmd, cwd) {
   return new Promise((resolve) => {

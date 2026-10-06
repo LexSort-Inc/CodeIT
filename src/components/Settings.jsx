@@ -17,7 +17,12 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
   const [show, setShow] = useState(false);
   const [secured, setSecured] = useState(false);
   useEffect(() => {
-    getKeys().then((k) => { setKeysState(k); setSecured(Boolean(window.codeit?.keysGet)); });
+    getKeys().then((k) => {
+      setKeysState(k);
+      setSecured(Boolean(window.codeit?.keysGet));
+      // first run with no keys: open the panel so the save location is obvious
+      if (!KEY_FIELDS.some((f) => k[f.id])) setShow(true);
+    });
   }, []);
   const info = PROVIDERS.find((p) => p.id === provider);
   const keysSet = KEY_FIELDS.some((f) => keys[f.id]);
@@ -40,10 +45,11 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
       {show && (
         <div className="card row" style={{ flexWrap: 'wrap' }}>
           {KEY_FIELDS.map((f) => (
-            <label key={f.id} style={{ fontSize: 12 }}>{f.label}
-              <input type="password" value={keys[f.id] || ''} placeholder="free key" autoComplete="off"
+            <label key={f.id} style={{ fontSize: 12 }} title={keys[f.id] ? 'Saved ✓ — type to replace, clear to remove' : `Paste ${f.label} key — saves automatically`}>
+              {f.label} {keys[f.id] ? <span style={{ color: '#3fb950' }} title="Key saved">✓</span> : null}
+              <input type="password" value={keys[f.id] || ''} placeholder="paste key — saves as you type" autoComplete="off"
                 onChange={async (e) => { const v = e.target.value; await setKey(f.id, v); setKeysState({ ...keys, [f.id]: v }); }}
-                style={{ width: 110, marginLeft: 4 }} />
+                style={{ width: 130, marginLeft: 4 }} />
               {KEY_LINKS[f.id] && (
                 <a href={KEY_LINKS[f.id].url} target="_blank" rel="noreferrer" title={`Get ${f.label} key — ${KEY_LINKS[f.id].note}`}
                   style={{ fontSize: 11, marginLeft: 4 }}>Get key ⧉</a>
