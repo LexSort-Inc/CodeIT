@@ -6,7 +6,7 @@ import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { markDead, isDeadFailure } from '../llm/models.js';
 
-const WELCOME = 'CodeIT ready. Ollama default `qwen2.5-coder:7b`. Attach file context with the +File button, pin files, or enable tools in Extensions.';
+const WELCOME = 'CodeIT ready. Attach file context with the +File button, pin files, or enable tools in Extensions. Pick any thread model from the menu above.';
 const MAX_THREADS = 4;
 const PLANNER_SUFFIX = '\n\nYou are in PLAN MODE. Do not write code or call tools. Output: 1) files to touch, 2) numbered steps, 3) risks. End with "Awaiting approval — say Execute to proceed."';
 
@@ -241,7 +241,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     return mcpResultToText(r.result);
   }
 
-  async function buildCtx(text) {
+  async function buildCtx(text, thread) {
+    const identity = thread ? `${thread.model} (via ${thread.provider} inside CodeIT)` : null;
     let pinsText = '';
     const scopePaths = [...new Set([...(active.scope || []), ...(project?.pinned || [])])].slice(0, 8);
     if (scopePaths.length && window.codeit?.fsRead) {
@@ -255,7 +256,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       pinsText = parts.join('\n\n');
     }
     const matched = matchSkills(skills, text, enabledSkillIds);
-    return buildSystemPrompt({ notes: projectNotes, pinsText, skills: matched });
+    return buildSystemPrompt({ notes: projectNotes, pinsText, skills: matched, identity });
   }
 
   async function runThread(thread, text, sys, opts = {}) {
@@ -392,7 +393,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     const planMsg = [...thread.msgs].reverse().find((m) => m.role === 'assistant');
     if (!planMsg) return;
     setPlanMode(false);
-    const sys = await buildCtx(`execute approved plan for ${project?.name || 'project'}`);
+    const sys = await buildCtx(`execute approved plan for ${project?.name || 'project'}`, thread);
     runThread(thread, `Approved plan — execute it now, step by step:\n\n${planMsg.content.slice(0, 6000)}`, sys, { planning: false });
   }
 
@@ -401,7 +402,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     if (idx < 0 || busyIds.length) return;
     const text = thread.msgs[idx].content;
     patchThread(thread.id, { msgs: thread.msgs.slice(0, idx), planned: false });
-    const sys = await buildCtx(text);
+    const sys = await buildCtx(text, thread);
     runThread({ ...thread, msgs: thread.msgs.slice(0, idx) }, text, sys);
   }
 
@@ -416,7 +417,6 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       await runToolDirect(active, text.slice(6).trim());
       return;
     }
-    const sys = await buildCtx(text);
     // consume attached file into each target thread's scope (their own editor context)
     if (fileContext?.path) {
       for (const t of targets) {
@@ -430,6 +430,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     abortRef.current = ctrl;
     try {
       for (const t of targets) {
+        // per-target system prompt so each model gets its own identity
+        // eslint-disable-next-line no-await-in-loop
+        const sys = await buildCtx(text, t);
         // eslint-disable-next-line no-await-in-loop
         await runThread(t, text, sys, { signal: ctrl.signal });
       }

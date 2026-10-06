@@ -20,8 +20,9 @@ export function matchSkills(skills, text, enabledIds) {
   return scored.sort((a, b) => b.score - a.score).slice(0, 2).map((x) => x.skill);
 }
 
-export function buildSystemPrompt({ notes, pinsText, skills }) {
-  const parts = ['You are CodeIT, a local-first coding assistant. Be concise. When asked to edit code, output the full replacement file content in a ``` code fence.'];
+export function buildSystemPrompt({ notes, pinsText, skills, identity }) {
+  const who = identity || 'an AI coding assistant';
+  const parts = [`You are ${who}, running inside the CodeIT app. If asked what model you are, answer with exactly that identity and nothing else. Be concise. When asked to edit code, output the full replacement file content in a fenced code block.`];
   if (notes) parts.push(`--- PROJECT NOTES ---\n${String(notes).slice(0, 4000)}`);
   if (pinsText) parts.push(`--- PINNED FILES ---\n${String(pinsText).slice(0, 12000)}`);
   for (const s of skills || []) {
