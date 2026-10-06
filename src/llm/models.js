@@ -7,7 +7,7 @@ export const KEY_LINKS = {
   deepseek: { url: 'https://platform.deepseek.com/api_keys', note: 'Paid, cheap' },
   openrouter: { url: 'https://openrouter.ai/keys', note: 'Free models' },
   anthropic: { url: 'https://console.anthropic.com/settings/keys', note: 'Paid' },
-  brave: { url: 'https://api.search.brave.com/app/keys', note: 'Search API' },
+  brave: { url: 'https://api-dashboard.search.brave.com/register', note: 'Search API' },
 };
 
 // Per-model display facts. Context in tokens; null = varies (agent default).
