@@ -134,14 +134,17 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // renderer error ring buffer for diagnostics (last 20)
+  // renderer error ring buffer for diagnostics (last 20): sync + async
   const errorsRef = useRef([]);
   useEffect(() => {
-    const onErr = (e) => {
-      errorsRef.current = [...errorsRef.current.slice(-19), `${new Date().toISOString()} ${e.message || e.error} @${e.filename || ''}:${e.lineno || ''}`];
+    const push = (s) => {
+      errorsRef.current = [...errorsRef.current.slice(-19), `${new Date().toISOString()} ${s}`];
     };
+    const onErr = (e) => push(`${e.message || e.error} @${e.filename || ''}:${e.lineno || ''}`);
+    const onRej = (e) => push(`unhandled: ${e.reason?.message || e.reason || e}`);
     window.addEventListener('error', onErr);
-    return () => window.removeEventListener('error', onErr);
+    window.addEventListener('unhandledrejection', onRej);
+    return () => { window.removeEventListener('error', onErr); window.removeEventListener('unhandledrejection', onRej); };
   }, []);
 
   async function copyDiagnostics() {

@@ -20,7 +20,7 @@ function newThread(provider, model, n) {
     id: `t${Date.now().toString(36)}${n}`,
     provider, model, title: 'New chat',
     createdAt: now, updatedAt: now, archived: false,
-    msgs: [{ role: 'assistant', content: WELCOME }],
+    msgs: [{ role: 'assistant', content: WELCOME, via: `${provider}/${model}` }],
     toolLog: [], scope: [], editorPath: null, lastUsage: null, planned: false,
   };
 }
@@ -214,7 +214,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   }
 
   function clearThread(id) {
-    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME }], toolLog: [], planned: false, lastUsage: null });
+    const t = threads.find((x) => x.id === id);
+    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME, via: t ? `${t.provider}/${t.model}` : undefined }], toolLog: [], planned: false, lastUsage: null });
   }
 
   function toggleSelect(id) {
@@ -334,6 +335,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
+      const streak = (thread.errStreak || 0) + 1;
+      patchThread(tid, { errStreak: streak });
+      const streakMsg = streak >= 2 ? `\n\n_Failed ${streak}x in a row on this model — pick another from the menu above or fix billing/keys, then resend._` : '';
       if (err && err.name === 'AbortError') {
         setThreads((cur) => cur.map((x) => {
           if (x.id !== tid) return x;
@@ -356,12 +360,12 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
         const c = [...x.msgs];
-        c[c.length - 1] = { role: 'assistant', content: acc ? acc + '\n\n' + hint : hint };
+        c[c.length - 1] = { role: 'assistant', content: (acc ? acc + '\n\n' + hint : hint) + streakMsg, via };
         return { ...x, msgs: c };
       }));
     }
     const cost = costUSD(thread.model, use.prompt, use.completion);
-    patchThread(tid, { lastUsage: { ...use, cost } });
+    patchThread(tid, { lastUsage: { ...use, cost }, errStreak: 0 });
     window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
     onUsageTick?.();
     setBusyIds((b) => b.filter((id) => id !== tid));
@@ -372,7 +376,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     const tid = thread.id;
     const m = spec.match(/^([\w-]+)\.([\w-]+)\s*(\{[\s\S]*\})?\s*$/);
     if (!m) {
-      patchThread(tid, { msgs: [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: 'Usage: `/tool server.tool {"arg":…}` — e.g. `/tool memory.read_graph {}`. Servers: ' + mcpTools.map((t) => t.serverId.replace(/^mcp:/, '')).filter((v, i, a) => a.indexOf(v) === i).join(', ') }] });
+      patchThread(tid, { msgs: [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: 'Usage: `/tool server.tool {"arg":…}` — e.g. `/tool memory.read_graph {}`. Servers: ' + mcpTools.map((t) => t.serverId.replace(/^mcp:/, '')).filter((v, i, a) => a.indexOf(v) === i).join(', '), via: `${thread.provider}/${thread.model}` }] });
       return;
     }
     const [, short, name, json] = m;
@@ -383,7 +387,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     patchThread(tid, { msgs: next });
     const out = await executeTool(tid, { serverId: `mcp:${short}`, name, args });
     patchThread(tid, {
-      msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\`` }],
+      msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\``, via: `${thread.provider}/${thread.model}` }],
       toolLog: [...thread.toolLog, `⚙️ mcp:${short}.${name}`],
     });
     setBusyIds((b) => b.filter((id) => id !== tid));
@@ -453,6 +457,18 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     if (t.provider === 'ollama' || t.provider === 'opencode') return 'FREE';
     if (t.lastUsage.cost == null) return null;
     return fmtCost(t.lastUsage.cost);
+  }
+
+  // Nuclear guard: threads should never be empty, but a blank chat with dead
+  // inputs is worse than an honest error + one-click recovery.
+  if (!active) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>Chat unavailable</div>
+        <div style={{ fontSize: 13, opacity: 0.7, maxWidth: 340 }}>No chat threads exist for this project (state error).</div>
+        <button className="btn btn-primary" onClick={addThread}>Recover — new chat</button>
+      </div>
+    );
   }
 
   const busy = busyIds.length > 0;
