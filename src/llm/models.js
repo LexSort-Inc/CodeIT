@@ -64,12 +64,19 @@ function deadCache() {
   try { return JSON.parse(localStorage.getItem('codeit.deadModels') || '{}'); } catch { return {}; }
 }
 export function isDead(providerId, model) {
-  return !!deadCache()[`${providerId}/${model}`];
+  const e = deadCache()[`${providerId}/${model}`];
+  if (!e) return false;
+  if (e.until && Date.now() > e.until) return false; // temporary marks expire
+  return true;
 }
-export function markDead(providerId, model, reason) {
+export function markDead(providerId, model, reason, ttlMs = 0) {
   try {
     const c = deadCache();
-    c[`${providerId}/${model}`] = { reason: String(reason || '').slice(0, 120), at: new Date().toISOString() };
+    c[`${providerId}/${model}`] = {
+      reason: String(reason || '').slice(0, 120),
+      at: new Date().toISOString(),
+      until: ttlMs ? Date.now() + ttlMs : 0, // 0 = permanent
+    };
     const keys = Object.keys(c).slice(-200);
     const trimmed = {};
     for (const k of keys) trimmed[k] = c[k];
@@ -85,6 +92,16 @@ export function deadCount() {
 // Permanent "won't run" failures (vs account states like quota/balance, which can be fixed).
 export function isDeadFailure(message) {
   return /model_not_found|does not exist|no longer available|deprecated|not enabled on your key|you do not have access/i.test(String(message || ''));
+}
+// Temporary "won't run right now" failures (quota, billing, overload): expire after an hour.
+export const TEMP_DEAD_TTL_MS = 60 * 60 * 1000;
+export function isTempDeadFailure(message) {
+  return /429|quota|rate.?limit|balance|insufficient|billing|overloaded|temporarily unavailable|529|503/i.test(String(message || ''));
+}
+// Our own error bubbles (send failures), matched for load-time migration.
+export function isErrorBubble(content) {
+  const s = String(content || '');
+  return /^Missing .+ key — add it in /.test(s) || /^\S+ \d{3}:\s*\{/.test(s);
 }
 
 // Live lists cached in localStorage (refresh button in picker). Static list is fallback.

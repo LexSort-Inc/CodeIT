@@ -4,7 +4,7 @@ import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
-import { markDead, isDeadFailure, isDead } from '../llm/models.js';
+import { markDead, isDeadFailure, isTempDeadFailure, isDead, isErrorBubble, TEMP_DEAD_TTL_MS } from '../llm/models.js';
 
 const WELCOME = 'CodeIT ready. Pick a model from the menu above — free-tier Groq/Gemini need only a key. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
@@ -129,8 +129,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       if (saved && Array.isArray(saved.threads) && saved.threads.length) {
         const fresh = (t) => {
           const base = { ...newThread(canonProvider(t.provider) || provider, t.model || model, 0), ...t, provider: canonProvider(t.provider) || provider };
-          // Proven-dead model? Keep history, switch the live model to working defaults.
-          if (isDead(base.provider, base.model)) {
+          // Dead model, or last word is one of our own error bubbles?
+          // Keep history, switch the live model to working defaults.
+          const lastAssistant = [...(t.msgs || [])].reverse().find((m) => m.role === 'assistant' && m.content && m.content !== WELCOME);
+          if (isDead(base.provider, base.model) || (lastAssistant && isErrorBubble(lastAssistant.content))) {
             base.provider = provider;
             base.model = model;
             base.errStreak = 0;
@@ -403,6 +405,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }
       const msg = String(err.message || '');
       if (isDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg);
+      // Temporary states only count after consecutive failures (single 429 spikes happen).
+      else if (streak >= 2 && isTempDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg, TEMP_DEAD_TTL_MS);
       const hint = err.code === 'NO_KEY' ? String(err.message)
         : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
         : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Groq free tier.`
