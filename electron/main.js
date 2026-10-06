@@ -260,6 +260,18 @@ ipcMain.handle('projects:remove', async (_e, id) => {
   return data;
 });
 
+// ---------- Fresh start: wipe projects, chats, usage. Keys are kept (credentials).
+ipcMain.handle('app:reset-data', async () => {
+  await ensureStore();
+  await saveProjects({ activeId: null, projects: [] });
+  try {
+    const files = await fs.readdir(chatsDir());
+    for (const f of files) if (f.endsWith('.json')) await fs.unlink(path.join(chatsDir(), f)).catch(() => {});
+  } catch {}
+  try { await fs.unlink(usageFile()); } catch {}
+  return true;
+});
+
 ipcMain.handle('projects:rename', async (_e, id, name) => {
   const data = await loadProjects();
   const p = data.projects.find((x) => x.id === id);

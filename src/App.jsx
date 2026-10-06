@@ -230,6 +230,15 @@ export default function App() {
             { id: 'web', label: 'Open web dock', run: () => setRightTab('web') },
             { id: 'ext', label: 'Open Extensions', run: () => setRailTab('extensions') },
             { id: 'usage', label: 'Open Usage', run: () => setRailTab('usage') },
+            {
+              id: 'reset', label: 'Reset app data (fresh start)…', run: async () => {
+                if (!window.codeit?.resetData) return;
+                if (!confirm('Forget ALL projects, chats, and usage history? Keys are kept. This cannot be undone.')) return;
+                if (!confirm('Really wipe everything and start fresh?')) return;
+                await window.codeit.resetData();
+                window.location.reload();
+              },
+            },
             ...(active ? [{ id: 'reveal', label: 'Reveal project in Finder/Explorer', run: () => window.codeit?.projectsReveal(active.path) }] : []),
           ]} />
       )}

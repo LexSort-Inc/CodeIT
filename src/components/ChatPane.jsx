@@ -136,7 +136,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
+      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', titledVia: t.titledVia || null, createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
       if (window.codeit?.projectsSaveChat) window.codeit.projectsSaveChat(projectId, payload);
       else { try { localStorage.setItem(chatKey(projectId), JSON.stringify(payload)); } catch {} }
     }, 800);
@@ -262,7 +262,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     const planning = opts.planning ?? planMode;
     patchThread(tid, {
       updatedAt: new Date().toISOString(),
-      ...(thread.title === 'New chat' ? { title: threadTitle(text) } : null),
+      ...(thread.title === 'New chat' ? { title: threadTitle(text), titledVia: `${thread.provider}/${thread.model}` } : null),
     });
     setBusyIds((b) => [...b, tid]);
     patchThread(tid, { toolLog: [], planned: false });
@@ -464,8 +464,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
             .map((t) => (
               <div key={t.id} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: t.archived ? 0.6 : 1 }}
-                  title={`${t.provider}/${t.model} · ${(t.msgs || []).length} msgs`}>
-                  {t.archived ? '📦 ' : '💬 '}{t.title || 'New chat'} <span style={{ opacity: 0.6 }}>· {t.provider}/{shortModel(t.model)}</span>
+                  title={`${t.titledVia || `${t.provider}/${t.model}`} · ${(t.msgs || []).length} msgs`}>
+                  {t.archived ? '📦 ' : '💬 '}{t.title || 'New chat'} <span style={{ opacity: 0.6 }}>· {t.titledVia || `${t.provider}/${shortModel(t.model)}`}</span>
                 </span>
                 {!t.archived
                   ? <button className="btn btn-sm btn-ghost" onClick={() => { setActiveId(t.id); setShowHistory(false); }}>Open</button>
@@ -488,9 +488,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         {compare && openThreads.length > 1 ? (
           openThreads.filter((t) => selected.has(t.id)).map((t) => {
             const last = [...t.msgs].reverse().find((m) => m.role === 'assistant');
+            const who = last?.via || `${t.provider}/${t.model}`;
             return (
               <div key={t.id} className="bubble assistant" style={{ alignSelf: 'stretch', maxWidth: '100%' }}>
-                <div className="role">{t.provider}/{t.model}{threadCost(t) ? ` · ${threadCost(t)}` : ''}</div>
+                <div className="role">{who}{threadCost(t) ? ` · ${threadCost(t)}` : ''}</div>
                 {last ? last.content.slice(0, 2000) : '(no response yet)'}
               </div>
             );
@@ -498,7 +499,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         ) : (
           active.msgs.map((m, i) => (
             <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
-              <div className="role">{m.role === 'assistant' ? (m.via || `${active.provider}/${active.model}`) : m.role}</div>
+              <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
               {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
             </div>
           ))
