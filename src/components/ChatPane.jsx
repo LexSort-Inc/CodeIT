@@ -333,7 +333,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     } catch (err) {
       const msg = String(err.message || '');
       const hint = err.code === 'NO_KEY' ? String(err.message)
-        : /model_not_found|does not exist|model_not_found/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu and pick a current one.`
+        : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
         : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Ollama/Groq free tier.`
         : thread.provider === 'ollama' ? `${msg} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`.`
         : `${msg} — Tip: check the key in Keys, or switch the thread to Ollama (local, no key).`;
