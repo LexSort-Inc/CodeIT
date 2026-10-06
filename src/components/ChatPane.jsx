@@ -6,7 +6,7 @@ import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { markDead, isDeadFailure } from '../llm/models.js';
 
-const WELCOME = 'CodeIT ready. Attach file context with the +File button, pin files, or enable tools in Extensions. Pick any thread model from the menu above.';
+const WELCOME = 'CodeIT ready. Pick a model from the menu above — free-tier Groq/Gemini need only a key. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
 const PLANNER_SUFFIX = '\n\nYou are in PLAN MODE. Do not write code or call tools. Output: 1) files to touch, 2) numbered steps, 3) risks. End with "Awaiting approval — say Execute to proceed."';
 
@@ -371,7 +371,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         });
       } else {
         if (!planning && mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
-          push(`_Note: ${thread.provider} is text-only here — MCP tools need Ollama/Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
+          push(`_Note: ${thread.provider} is text-only here — MCP tools need Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
         }
         await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage, signal: opts.signal });
       }
@@ -397,9 +397,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       if (isDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg);
       const hint = err.code === 'NO_KEY' ? String(err.message)
         : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
-        : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Ollama/Groq free tier.`
+        : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Groq free tier.`
         : thread.provider === 'ollama' ? `${msg} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`.`
-        : `${msg} — Tip: check the key in Keys, or switch the thread to Ollama (local, no key).`;
+        : `${msg} — Tip: check the key in Keys, or switch the thread to Groq free tier.`;
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
         const c = [...x.msgs];

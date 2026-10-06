@@ -98,10 +98,10 @@ export default function ModelPicker({ provider, model, onPick }) {
     const s = q.trim().toLowerCase();
     return !s || `${m.model} ${m.provider}`.toLowerCase().includes(s);
   }) : items;
-  const { working, ready, needsKey } = showDead
-    ? { working: visible, ready: [], needsKey: [] }
+  const { working, ready, needsKey, local } = showDead
+    ? { working: visible, ready: [], needsKey: [], local: [] }
     : splitReady(visible, savedKeys, verified);
-  const flat = showDead ? visible : [...working, ...ready, ...needsKey];
+  const flat = showDead ? visible : [...working, ...ready, ...needsKey, ...local];
   const sel = flat[idx] ?? items[idx];
   return (
     <div style={{ position: 'relative' }}>
@@ -127,6 +127,8 @@ export default function ModelPicker({ provider, model, onPick }) {
                 {!showDead && ready.map(row)}
                 {!showDead && needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
                 {!showDead && needsKey.map(row)}
+                {!showDead && local.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Local models</div>}
+                {!showDead && local.map(row)}
                 {showDead && flat.map(row)}
                 {flat.length === 0 && <div className="empty">No models match.</div>}
                 {!showDead && deadN > 0 && (

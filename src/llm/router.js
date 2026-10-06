@@ -109,7 +109,7 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage, 
   const key = keys[provider];
   if (!key) {
     const saved = Object.keys(keys).filter((k) => keys[k]);
-    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to Ollama.`);
+    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to a free-tier thread with a saved key.`);
     e.code = 'NO_KEY';
     throw e;
   }
@@ -227,7 +227,7 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
   const key = provider === 'ollama' ? null : keys[provider];
   if (provider !== 'ollama' && !key) {
     const saved = Object.keys(keys).filter((k) => keys[k]);
-    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to Ollama.`);
+    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to a free-tier thread with a saved key.`);
     e.code = 'NO_KEY';
     throw e;
   }

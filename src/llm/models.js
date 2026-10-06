@@ -124,20 +124,22 @@ export function allModels(includeDead = false) {
   return out;
 }
 
-// Split for the three-section picker. `verified` is a Set of 'provider/model'
+// Split for the picker. `verified` is a Set of 'provider/model'
 // with at least one successful call (observed truth, not claims):
-// working = local models + proven calls; ready = key saved but untested;
-// needsKey = no key yet.
+// working = proven cloud calls; ready = key saved but untested;
+// needsKey = no key yet; local = Ollama, always last, never suggested.
 export function splitReady(models, savedKeys, verified) {
   const working = [];
   const ready = [];
   const needsKey = [];
+  const local = [];
   for (const m of models) {
-    if (m.local || (verified && verified.has(`${m.provider}/${m.model}`))) working.push(m);
-    else if (!m.needsKey || savedKeys[m.keyId]) ready.push(m);
+    if (m.local) { local.push(m); continue; }
+    if (verified && verified.has(`${m.provider}/${m.model}`)) { working.push(m); continue; }
+    if (!m.needsKey || savedKeys[m.keyId]) ready.push(m);
     else needsKey.push(m);
   }
-  return { working, ready, needsKey };
+  return { working, ready, needsKey, local };
 }
 
 export function fmtContext(n) {

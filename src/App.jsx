@@ -16,8 +16,8 @@ import { Tabs, Menu } from './components/ui.jsx';
 import './styles.css';
 
 export default function App() {
-  const [provider, setProvider] = useState('ollama');
-  const [model, setModel] = useState('qwen2.5-coder:7b');
+  const [provider, setProvider] = useState('groq');
+  const [model, setModel] = useState('openai/gpt-oss-20b');
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
