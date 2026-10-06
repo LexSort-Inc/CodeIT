@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { allModels, setLiveModels } from '../llm/models.js';
+import { allModels, setLiveModels, splitReady, deadCount, clearDead } from '../llm/models.js';
 import { refreshProviderModels, PROVIDERS, getKeys } from '../llm/router.js';
 
 // Per-thread model menu: searchable, grouped, with a fact panel
@@ -59,12 +59,38 @@ export default function ModelPicker({ provider, model, onPick }) {
 
   function onKey(e) {
     if (e.key === 'Escape') setOpen(false);
-    else if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(i + 1, items.length - 1)); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(i + 1, flat.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); }
-    else if (e.key === 'Enter' && items[idx]) pick(items[idx]);
+    else if (e.key === 'Enter' && flat[idx]) pick(flat[idx]);
   }
 
-  const sel = items[idx];
+  function row(m) {
+    const i = flat.indexOf(m);
+    return (
+      <button key={`${m.provider}/${m.model}`} role="option" aria-selected={i === idx}
+        onMouseEnter={() => setIdx(i)} onClick={() => pick(m)}
+        style={{ display: 'flex', gap: 6, width: '100%', textAlign: 'left', fontSize: 12, padding: '5px 8px', border: 0, borderRadius: 0, background: i === idx ? '#1f6feb33' : 'transparent', color: 'inherit', cursor: 'pointer', opacity: showDead && m.dead ? 0.55 : 1 }}>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.agent ? '🤖 OpenCode agent' : m.model}</span>
+        {m.tier === 'local' && <span className="k" title="Runs on this machine — no key, no cost">Local</span>}
+        {m.tier === 'free' && <span className="k" title="Free tier — needs key, no card">Free</span>}
+        {m.tier === 'paid' && <span className="k" title="Paid — needs billing on the provider">Paid</span>}
+        {m.needsKey && (savedKeys[m.keyId]
+          ? <span title="Key saved ✓" style={{ color: '#3fb950', fontSize: 11 }}>✓</span>
+          : <span className="k" title={`Needs ${m.keyId} key — add it in Keys`}>key</span>)}
+      </button>
+    );
+  }
+
+  const [showDead, setShowDead] = useState(false);
+  const [deadN, setDeadN] = useState(0);
+  useEffect(() => { if (open) setDeadN(deadCount()); }, [open]);
+  const visible = showDead ? allModels(true).filter((m) => {
+    const s = q.trim().toLowerCase();
+    return !s || `${m.model} ${m.provider}`.toLowerCase().includes(s);
+  }) : items;
+  const { ready, needsKey } = showDead ? { ready: visible, needsKey: [] } : splitReady(visible, savedKeys);
+  const flat = showDead ? visible : [...ready, ...needsKey];
+  const sel = flat[idx] ?? items[idx];
   return (
     <div style={{ position: 'relative' }}>
       <button className="btn btn-sm" onClick={() => setOpen(!open)} title={`${provider}/${model} — pick model for this thread`} aria-haspopup="listbox" aria-expanded={open}>
@@ -83,20 +109,24 @@ export default function ModelPicker({ provider, model, onPick }) {
               </div>
               {(refreshing || refreshMsg) && <div className="muted" style={{ fontSize: 11, padding: '0 8px 4px' }}>{refreshing ? 'Refreshing…' : refreshMsg}</div>}
               <div style={{ overflowY: 'auto', flex: 1 }} onKeyDown={onKey}>
-                {items.map((m, i) => (
-                  <button key={`${m.provider}/${m.model}`} role="option" aria-selected={i === idx}
-                    onMouseEnter={() => setIdx(i)} onClick={() => pick(m)}
-                    style={{ ...ROW, background: i === idx ? '#1f6feb33' : 'transparent' }}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.agent ? '🤖 OpenCode agent' : m.model}</span>
-                    {m.tier === 'local' && <span className="k" title="Runs on this machine — no key, no cost">Local</span>}
-                    {m.tier === 'free' && <span className="k" title="Free tier — needs key, no card">Free</span>}
-                    {m.tier === 'paid' && <span className="k" title="Paid — needs billing on the provider">Paid</span>}
-                    {m.needsKey && (savedKeys[m.keyId]
-                      ? <span title="Key saved ✓" style={{ color: '#3fb950', fontSize: 11 }}>✓</span>
-                      : <span className="k" title={`Needs ${m.keyId} key — add it in Keys`}>key</span>)}
-                  </button>
-                ))}
-                {items.length === 0 && <div className="empty">No models match.</div>}
+                {!showDead && ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready now</div>}
+                {!showDead && ready.map(row)}
+                {!showDead && needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
+                {!showDead && needsKey.map(row)}
+                {showDead && flat.map(row)}
+                {flat.length === 0 && <div className="empty">No models match.</div>}
+                {!showDead && deadN > 0 && (
+                  <div style={{ padding: '4px 8px', fontSize: 11 }}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setShowDead(true)}>{deadN} not working — show</button>
+                    <button className="btn btn-sm btn-ghost" style={{ marginLeft: 4 }} onClick={() => { clearDead(); setDeadN(0); }} title="Forget the not-working list">clear</button>
+                  </div>
+                )}
+                {showDead && (
+                  <div style={{ padding: '4px 8px', fontSize: 11 }}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setShowDead(false)}>hide not-working</button>
+                    <button className="btn btn-sm btn-ghost" style={{ marginLeft: 4 }} onClick={() => { clearDead(); setDeadN(0); setShowDead(false); }}>clear list</button>
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ width: 170, borderLeft: '1px solid var(--line, #30363d)', padding: 10, fontSize: 12 }}>

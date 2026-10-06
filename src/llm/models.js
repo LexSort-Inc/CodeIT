@@ -58,6 +58,35 @@ export function modelFacts(providerId, model) {
   };
 }
 
+// Dead list: model IDs that failed with not-found/no-access/deprecated.
+// Recorded automatically on send errors, excluded from the picker by default.
+function deadCache() {
+  try { return JSON.parse(localStorage.getItem('codeit.deadModels') || '{}'); } catch { return {}; }
+}
+export function isDead(providerId, model) {
+  return !!deadCache()[`${providerId}/${model}`];
+}
+export function markDead(providerId, model, reason) {
+  try {
+    const c = deadCache();
+    c[`${providerId}/${model}`] = { reason: String(reason || '').slice(0, 120), at: new Date().toISOString() };
+    const keys = Object.keys(c).slice(-200);
+    const trimmed = {};
+    for (const k of keys) trimmed[k] = c[k];
+    localStorage.setItem('codeit.deadModels', JSON.stringify(trimmed));
+  } catch {}
+}
+export function clearDead() {
+  try { localStorage.removeItem('codeit.deadModels'); } catch {}
+}
+export function deadCount() {
+  return Object.keys(deadCache()).length;
+}
+// Permanent "won't run" failures (vs account states like quota/balance, which can be fixed).
+export function isDeadFailure(message) {
+  return /model_not_found|does not exist|no longer available|deprecated|not enabled on your key|you do not have access/i.test(String(message || ''));
+}
+
 // Live lists cached in localStorage (refresh button in picker). Static list is fallback.
 function liveCache() {
   try { return JSON.parse(localStorage.getItem('codeit.liveModels') || '{}'); } catch { return {}; }
@@ -76,7 +105,8 @@ export function setLiveModels(providerId, models) {
 
 // Flat searchable list for the picker, provider order preserved.
 // Live-cached providers show live IDs (marked live:true), others show the static list.
-export function allModels() {
+// Dead models excluded unless includeDead (used by the "hidden" row).
+export function allModels(includeDead = false) {
   const out = [];
   for (const p of PROVIDERS) {
     if (p.id === 'opencode') {
@@ -85,9 +115,24 @@ export function allModels() {
     }
     const live = getLiveModels(p.id);
     const ids = live ? live.models : p.models;
-    for (const m of ids) out.push({ provider: p.id, model: m, ...modelFacts(p.id, m), live: !!live });
+    for (const m of ids) {
+      const dead = isDead(p.id, m);
+      if (!includeDead && dead) continue;
+      out.push({ provider: p.id, model: m, ...modelFacts(p.id, m), live: !!live, dead });
+    }
   }
   return out;
+}
+
+// Split for the two-section picker: ready now vs needs a key first.
+export function splitReady(models, savedKeys) {
+  const ready = [];
+  const needsKey = [];
+  for (const m of models) {
+    if (!m.needsKey || savedKeys[m.keyId]) ready.push(m);
+    else needsKey.push(m);
+  }
+  return { ready, needsKey };
 }
 
 export function fmtContext(n) {

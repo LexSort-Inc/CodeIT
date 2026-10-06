@@ -4,6 +4,7 @@ import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
+import { markDead, isDeadFailure } from '../llm/models.js';
 
 const WELCOME = 'CodeIT ready. Ollama default `qwen2.5-coder:7b`. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
@@ -279,9 +280,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- RECENT ---\n${recent}`;
       const r = await window.codeit.opencodeRun(project?.path || '', thread.model, prompt);
       patchThread(tid, {
-        msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}` }],
+        msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}`, via: `opencode/${thread.model}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
-        lastUsage: { prompt: 0, completion: 0, cost: 0 },
       });
       window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0 });
       onUsageTick?.();
@@ -295,9 +295,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       ? `${text}\n\n--- ATTACHED FILE (${fileContext.path}) ---\n${fileContext.content.slice(0, 12000)}`
       : text;
     const next = [...thread.msgs, { role: 'user', content: text }];
+    const via = `${thread.provider}/${thread.model}`;
     patchThread(tid, { msgs: next });
     let acc = '';
-    patchThread(tid, { msgs: [...next, { role: 'assistant', content: '' }] });
+    patchThread(tid, { msgs: [...next, { role: 'assistant', content: '', via }] });
     const push = (t) => {
       acc += t;
       setThreads((cur) => cur.map((x) => {
@@ -332,6 +333,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
       const msg = String(err.message || '');
+      if (isDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg);
       const hint = err.code === 'NO_KEY' ? String(err.message)
         : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
         : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Ollama/Groq free tier.`
@@ -496,7 +498,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         ) : (
           active.msgs.map((m, i) => (
             <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
-              <div className="role">{m.role}</div>
+              <div className="role">{m.role === 'assistant' ? `assistant · ${m.via || `${active.provider}/${active.model}`}` : m.role}</div>
               {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
             </div>
           ))
