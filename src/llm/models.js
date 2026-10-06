@@ -35,6 +35,8 @@ const META = {
 };
 
 export function modelFacts(providerId, model) {
+  // NOTE: returns facts only — never provider/model ids (callers own those;
+  // spreading these over ids once broke verified-matching silently).
   const p = PROVIDERS.find((x) => x.id === providerId);
   const m = META[String(model)] || {};
   const id = String(model || '');
@@ -45,8 +47,7 @@ export function modelFacts(providerId, model) {
   else if (providerId === 'groq' || providerId === 'gemini') tier = 'free';
   else if (providerId === 'openrouter' && (id.endsWith(':free') || !!m.free)) tier = 'free';
   return {
-    provider: p ? p.label : providerId,
-    model,
+    providerLabel: p ? p.label : providerId,
     context: m.context ?? null,
     reasoning: !!m.reasoning,
     tier,

@@ -8,6 +8,7 @@
     "vite": "vite",
     "electron": "electron .",
     "build": "vite build && node scripts/write-build-info.mjs",
+    "test:smoke": "node --experimental-detect-module scripts/smoke/run.mjs",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "postinstall": "electron-builder install-app-deps || true"
