@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PROVIDERS, getKeys, setKey } from '../llm/router.js';
+import { KEY_LINKS } from '../llm/models.js';
 
 const KEY_FIELDS = [
   { id: 'gemini', label: 'gemini' },
@@ -43,6 +44,10 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
               <input type="password" value={keys[f.id] || ''} placeholder="free key" autoComplete="off"
                 onChange={async (e) => { const v = e.target.value; await setKey(f.id, v); setKeysState({ ...keys, [f.id]: v }); }}
                 style={{ width: 110, marginLeft: 4 }} />
+              {KEY_LINKS[f.id] && (
+                <a href={KEY_LINKS[f.id].url} target="_blank" rel="noreferrer" title={`Get ${f.label} key — ${KEY_LINKS[f.id].note}`}
+                  style={{ fontSize: 11, marginLeft: 4 }}>Get key ⧉</a>
+              )}
             </label>
           ))}
           <span style={{ fontSize: 11, color: 'var(--dim)' }}>

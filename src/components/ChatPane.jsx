@@ -3,6 +3,7 @@ import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCap
 import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
+import ModelPicker from './ModelPicker.jsx';
 
 const WELCOME = 'CodeIT ready. Ollama default `qwen2.5-coder:7b`. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
@@ -470,17 +471,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         </div>
       )}
       <div className="thread-meta">
-        <label className="sr-only" htmlFor="thread-provider">Thread provider</label>
-        <select id="thread-provider" value={active.provider} onChange={(e) => {
-          const p = PROVIDERS.find((x) => x.id === e.target.value);
-          patchThread(activeId, { provider: p.id, model: p.models[0] });
-        }} style={{ fontSize: 12 }}>
-          {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-        </select>
-        <label className="sr-only" htmlFor="thread-model">Thread model</label>
-        <select id="thread-model" value={active.model} onChange={(e) => patchThread(activeId, { model: e.target.value })} style={{ fontSize: 12 }}>
-          {PROVIDERS.find((p) => p.id === active.provider).models.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+        <ModelPicker provider={active.provider} model={active.model}
+          onPick={(provider, model) => patchThread(activeId, { provider, model })} />
         <button className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setPlanMode(!planMode)}
           title="Plan mode: model plans, you approve, then it executes" aria-pressed={planMode}>Plan</button>
         <span>{project ? `Project: ${project.name}` : 'No project'}</span>
