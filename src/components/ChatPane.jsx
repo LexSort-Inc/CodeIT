@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable } from '../llm/router.js';
+import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable, canonProvider } from '../llm/router.js';
 import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
@@ -84,7 +84,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       else { try { saved = JSON.parse(localStorage.getItem(chatKey(projectId))); } catch { saved = null; } }
       let list = null;
       if (saved && Array.isArray(saved.threads) && saved.threads.length) {
-        const fresh = (t) => ({ ...newThread(t.provider || provider, t.model || model, 0), ...t });
+        const fresh = (t) => ({ ...newThread(canonProvider(t.provider) || provider, t.model || model, 0), ...t, provider: canonProvider(t.provider) || provider });
         const open = saved.threads.filter((t) => !t.archived).slice(0, MAX_THREADS).map((t) => ({
           ...fresh(t),
           msgs: Array.isArray(t.msgs) && t.msgs.length ? t.msgs : [{ role: 'assistant', content: WELCOME }],

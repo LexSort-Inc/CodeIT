@@ -3,6 +3,20 @@
 
 const OLLAMA_HOST = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OLLAMA_HOST) || 'http://127.0.0.1:11434';
 
+// Canonicalize a provider reference: accepts id or label in any case
+// ('anthropic', 'Anthropic', 'Claude (Anthropic)') -> 'anthropic'.
+// Threads persisted by older builds may hold labels; key lookup must not miss.
+export function canonProvider(p) {
+  const s = String(p || '').trim().toLowerCase();
+  if (!s) return p;
+  const hit = PROVIDERS.find((x) => x.id.toLowerCase() === s || String(x.label || '').toLowerCase() === s);
+  return hit ? hit.id : p;
+}
+
+export function providerLabel(p) {
+  return PROVIDERS.find((x) => x.id === canonProvider(p))?.label || String(p);
+}
+
 export const PROVIDERS = [
   { id: 'ollama', label: 'Ollama (local)', supportsTools: true, contextK: 16, models: ['qwen2.5-coder:7b', 'qwen2.5-coder:14b', 'llama3.2:3b', 'qwen3:8b', 'mistral:7b-instruct-v0.3-q4_0'] },
   { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-2.0-flash', 'gemini-1.5-flash'] },
@@ -61,6 +75,7 @@ async function* sseLines(res) {
 
 // Stream chat; onChunk(token), onUsage({prompt, completion}). Throws with .code = 'NO_KEY' | HTTP error.
 export async function streamChat({ provider, model, messages, onChunk, onUsage }) {
+  provider = canonProvider(provider);
   if (provider === 'ollama') {
     const res = await fetch(`${OLLAMA_HOST}/v1/chat/completions`, {
       method: 'POST',
@@ -86,7 +101,8 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage }
   const keys = await getKeys();
   const key = keys[provider];
   if (!key) {
-    const e = new Error(`Missing ${provider} key — add it in Settings (free tier key) or switch to Ollama.`);
+    const saved = Object.keys(keys).filter((k) => keys[k]);
+    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to Ollama.`);
     e.code = 'NO_KEY';
     throw e;
   }
@@ -200,6 +216,7 @@ function toOpenAiTools(mcpTools) {
 }
 
 export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolEvent, onUsage }) {
+  provider = canonProvider(provider);
   if (provider === 'opencode') {
     const e = new Error('OpenCode runs via the agent runner, not the MCP loop.');
     e.code = 'OPENCODE_ENGINE';
@@ -208,7 +225,8 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
   const keys = await getKeys();
   const key = provider === 'ollama' ? null : keys[provider];
   if (provider !== 'ollama' && !key) {
-    const e = new Error(`Missing ${provider} key — add it in Settings or switch to Ollama.`);
+    const saved = Object.keys(keys).filter((k) => keys[k]);
+    const e = new Error(`Missing ${providerLabel(provider)} key — add it in Keys (saved: ${saved.length ? saved.join(', ') : 'none'}) or switch to Ollama.`);
     e.code = 'NO_KEY';
     throw e;
   }
