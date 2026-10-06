@@ -14,7 +14,7 @@ const KEY_FIELDS = [
 // App-level selects are DEFAULTS for new threads; each thread has its own picker.
 export default function Settings({ provider, setProvider, model, setModel, toolCount }) {
   const [keys, setKeysState] = useState({});
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(true); // keys stay visible until dismissed
   const [secured, setSecured] = useState(false);
   const [tests, setTests] = useState({}); // id -> { phase, msg }
 
@@ -27,8 +27,6 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
     getKeys().then((k) => {
       setKeysState(k);
       setSecured(Boolean(window.codeit?.keysGet));
-      // first run with no keys: open the panel so the save location is obvious
-      if (!KEY_FIELDS.some((f) => k[f.id])) setShow(true);
     });
   }, []);
   const info = PROVIDERS.find((p) => p.id === provider);
