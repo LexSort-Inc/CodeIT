@@ -134,6 +134,36 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // renderer error ring buffer for diagnostics (last 20)
+  const errorsRef = useRef([]);
+  useEffect(() => {
+    const onErr = (e) => {
+      errorsRef.current = [...errorsRef.current.slice(-19), `${new Date().toISOString()} ${e.message || e.error} @${e.filename || ''}:${e.lineno || ''}`];
+    };
+    window.addEventListener('error', onErr);
+    return () => window.removeEventListener('error', onErr);
+  }, []);
+
+  async function copyDiagnostics() {
+    const lines = [`CodeIT diagnostics ${new Date().toISOString()}`, `platform: ${window.navigator?.platform || '?'}`, `projects: ${projects.length} (active: ${active?.name || 'none'})`];
+    try {
+      const b = await window.codeit?.buildInfo?.();
+      if (b) lines.push(`build: v${b.version}·${b.commit} (${b.date || 'no date'})`);
+    } catch {}
+    try {
+      const p = await window.codeit?.appPaths?.();
+      if (p) lines.push(`userData: ${p.userData}`, `store: ${p.store}`);
+    } catch {}
+    try {
+      const u = await window.codeit?.usageGet?.();
+      if (u) lines.push(`usage events: ${u.total}`);
+    } catch {}
+    lines.push(`renderer errors (${errorsRef.current.length}):`);
+    for (const e of errorsRef.current) lines.push(`  ${e}`);
+    const text = lines.join('\n');
+    try { await navigator.clipboard.writeText(text); } catch { prompt('Copy diagnostics:', text); }
+  }
+
   return (
     <div className={`app${zen ? ' zen' : ''}`}>
       <header className="topbar">
@@ -230,6 +260,7 @@ export default function App() {
             { id: 'web', label: 'Open web dock', run: () => setRightTab('web') },
             { id: 'ext', label: 'Open Extensions', run: () => setRailTab('extensions') },
             { id: 'usage', label: 'Open Usage', run: () => setRailTab('usage') },
+            { id: 'diag', label: 'Copy diagnostics (build, paths, errors)', run: copyDiagnostics },
             {
               id: 'reset', label: 'Reset app data (fresh start)…', run: async () => {
                 if (!window.codeit?.resetData) return;

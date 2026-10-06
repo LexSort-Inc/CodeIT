@@ -189,19 +189,39 @@ ipcMain.handle('tasks:kill', async (_e, id) => {
   return { ok: true };
 });
 
-// ---------- IPC: OpenCode agent (non-interactive run in project dir) ----------
+// ---------- IPC: OpenCode agent (non-interactive run in project dir, killable) ----------
+const opencodeProcs = new Map(); // dir -> ChildProcess
 ipcMain.handle('opencode:run', async (_e, dir, model, prompt) => {
   const args = ['run', String(prompt || '')];
   if (dir) args.push('--dir', String(dir));
   if (model && model !== 'default') args.push('-m', String(model));
+  const key = String(dir || 'default');
   return new Promise((resolve) => {
-    execFile('opencode', args, { cwd: dir || os.homedir(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
-      const out = String(stdout || '').slice(0, 20000);
-      if (error && !out) resolve({ ok: false, error: String(stderr || error.message).slice(0, 2000) });
-      else resolve({ ok: true, out });
-    });
+    let child = null;
+    try {
+      child = execFile('opencode', args, { cwd: dir || os.homedir(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+        if (opencodeProcs.get(key) === child) opencodeProcs.delete(key);
+        const out = String(stdout || '').slice(0, 20000);
+        if (error && !out) resolve({ ok: false, error: String(stderr || error.message).slice(0, 2000) });
+        else resolve({ ok: true, out });
+      });
+      opencodeProcs.set(key, child);
+      child.on('error', () => {});
+    } catch (err) {
+      resolve({ ok: false, error: String(err.message || err).slice(0, 500) });
+    }
   });
 });
+ipcMain.handle('opencode:cancel', async (_e, dir) => {
+  const child = opencodeProcs.get(String(dir || 'default'));
+  if (!child) return { ok: false };
+  try { child.kill('SIGTERM'); } catch {}
+  setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 3000);
+  return { ok: true };
+});
+
+// ---------- Renderer diagnostics: store paths ----------
+ipcMain.handle('app:paths', async () => ({ userData: app.getPath('userData'), store: storeDir() }));
 
 // ---------- IPC: LLM passthrough ----------
 ipcMain.handle('llm:ping', async (_e, host) => {

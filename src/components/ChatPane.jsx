@@ -67,6 +67,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const saveTimer = useRef(null);
   const approvalResolve = useRef({});
   const threadCount = useRef(0);
+  const abortRef = useRef(null); // AbortController for the in-flight send (all targets)
 
   const openThreads = threads.filter((t) => !t.archived);
   const active = openThreads.find((t) => t.id === activeId) || openThreads[0] || threads[0];
@@ -304,7 +305,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
         const c = [...x.msgs];
-        c[c.length - 1] = { role: 'assistant', content: acc };
+        c[c.length - 1] = { role: 'assistant', content: acc, via };
         return { ...x, msgs: c };
       }));
     };
@@ -319,7 +320,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         }
         await chatWithTools({
           provider: thread.provider, model: thread.model, messages: history, mcpTools,
-          onChunk: push, onUsage,
+          onChunk: push, onUsage, signal: opts.signal,
           onToolEvent: (e) => setThreads((cur) => cur.map((x) => x.id === tid
             ? { ...x, toolLog: [...x.toolLog, `${e.status === 'calling' ? '⚙️' : '✅'} ${e.serverId}.${e.name}`] }
             : x)),
@@ -328,10 +329,22 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         if (!planning && mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
           push(`_Note: ${thread.provider} is text-only here — MCP tools need Ollama/Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
         }
-        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage });
+        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage, signal: opts.signal });
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
+      if (err && err.name === 'AbortError') {
+        setThreads((cur) => cur.map((x) => {
+          if (x.id !== tid) return x;
+          const c = [...x.msgs];
+          c[c.length - 1] = { role: 'assistant', content: acc ? acc + '\n\n_Stopped._' : '_Stopped._', via };
+          return { ...x, msgs: c };
+        }));
+        window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion });
+        onUsageTick?.();
+        setBusyIds((b) => b.filter((id) => id !== tid));
+        return;
+      }
       const msg = String(err.message || '');
       if (isDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg);
       const hint = err.code === 'NO_KEY' ? String(err.message)
@@ -412,10 +425,24 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       setFileContext?.(null);
     }
     setInput('');
-    for (const t of targets) {
-      // eslint-disable-next-line no-await-in-loop
-      await runThread(t, text, sys);
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      for (const t of targets) {
+        // eslint-disable-next-line no-await-in-loop
+        await runThread(t, text, sys, { signal: ctrl.signal });
+      }
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
     }
+  }
+
+  function stopAll() {
+    abortRef.current?.abort();
+    window.codeit?.opencodeCancel(project?.path || '');
+    // runThread completions clear their own busy flags; force-clear in case one is stuck
+    setTimeout(() => setBusyIds([]), 500);
   }
 
   function threadCost(t) {
@@ -533,7 +560,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
             ≈{fmtTokens(est.tokens)}{est.cost == null ? '' : active.provider === 'ollama' || active.provider === 'opencode' ? ' · FREE' : ` · ${fmtCost(est.cost)}`}
           </span>
         )}
-        <button className="btn btn-primary" onClick={send} disabled={busy}>{busy ? '…' : planMode ? 'Plan' : 'Send'}</button>
+        {busy
+          ? <button className="btn btn-danger" onClick={stopAll} title="Stop all running threads">⏹ Stop</button>
+          : <button className="btn btn-primary" onClick={send}>{planMode ? 'Plan' : 'Send'}</button>}
       </div>
       <ToolApproval pending={pendings[activeId] || null} onResolve={(d) => resolveApproval(activeId, d)} />
     </div>

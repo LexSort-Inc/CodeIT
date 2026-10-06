@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('codeit', {
   tasksTail: (id) => ipcRenderer.invoke('tasks:tail', id),
   tasksKill: (id) => ipcRenderer.invoke('tasks:kill', id),
   opencodeRun: (dir, model, prompt) => ipcRenderer.invoke('opencode:run', dir, model, prompt),
+  opencodeCancel: (dir) => ipcRenderer.invoke('opencode:cancel', dir),
+  appPaths: () => ipcRenderer.invoke('app:paths'),
   llmPing: (host) => ipcRenderer.invoke('llm:ping', host),
   // projects — organized multi-project workflow (local folders + GitHub repos)
   projectsList: () => ipcRenderer.invoke('projects:list'),

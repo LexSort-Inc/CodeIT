@@ -74,13 +74,14 @@ async function* sseLines(res) {
 }
 
 // Stream chat; onChunk(token), onUsage({prompt, completion}). Throws with .code = 'NO_KEY' | HTTP error.
-export async function streamChat({ provider, model, messages, onChunk, onUsage }) {
+export async function streamChat({ provider, model, messages, onChunk, onUsage, signal }) {
   provider = canonProvider(provider);
   if (provider === 'ollama') {
     const res = await fetch(`${OLLAMA_HOST}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true })
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}: is 'ollama serve' running?`);
     for await (const line of sseLines(res)) {
@@ -114,7 +115,7 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage }
   }
 
   if (provider === 'anthropic') {
-    await streamAnthropic({ model, key, messages, onChunk, onUsage });
+    await streamAnthropic({ model, key, messages, onChunk, onUsage, signal });
     return;
   }
 
@@ -129,7 +130,7 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage }
   if (provider === 'groq' || provider === 'deepseek') headers.Authorization = `Bearer ${key}`;
   if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://codeit.app'; }
 
-  const res = await fetch(conf.url, { method: 'POST', headers, body: JSON.stringify(conf.map(messages)) });
+  const res = await fetch(conf.url, { method: 'POST', headers, body: JSON.stringify(conf.map(messages)), signal });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   await conf.parse(res, onChunk, onUsage);
 }
@@ -149,11 +150,11 @@ async function parseGemini(res, onChunk, onUsage) {
     } catch { /* keep-alive */ }
   }
 }
-async function streamAnthropic({ model, key, messages, onChunk, onUsage }) {
+async function streamAnthropic({ model, key, messages, onChunk, onUsage, signal }) {
   const sys = messages.find((m) => m.role === 'system');
   const turns = messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content }));
   const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+    method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model, max_tokens: 4096, system: sys?.content, messages: turns, stream: true })
   });
@@ -192,7 +193,7 @@ async function parseOpenAI(res, onChunk, onUsage) {
 // Collects enabled MCP tools, does one non-streaming pass with `tools`,
 // executes calls via onToolCall({serverId,name,args,risk}) -> string,
 // then streams the final answer. Max 3 tool rounds. Gemini excluded (different shape).
-async function openAiPost({ provider, model, key, body }) {
+async function openAiPost({ provider, model, key, body, signal }) {
   const urls = {
     ollama: `${OLLAMA_HOST}/v1/chat/completions`,
     groq: 'https://api.groq.com/openai/v1/chat/completions',
@@ -202,7 +203,7 @@ async function openAiPost({ provider, model, key, body }) {
   const headers = { 'Content-Type': 'application/json' };
   if (provider !== 'ollama') headers.Authorization = `Bearer ${key}`;
   if (provider === 'openrouter') headers['HTTP-Referer'] = 'https://codeit.app';
-  const res = await fetch(urls[provider], { method: 'POST', headers, body: JSON.stringify({ model, ...body }) });
+  const res = await fetch(urls[provider], { method: 'POST', headers, body: JSON.stringify({ model, ...body }), signal });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   return res;
 }
@@ -215,7 +216,7 @@ function toOpenAiTools(mcpTools) {
   }));
 }
 
-export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolEvent, onUsage }) {
+export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolEvent, onUsage, signal }) {
   provider = canonProvider(provider);
   if (provider === 'opencode') {
     const e = new Error('OpenCode runs via the agent runner, not the MCP loop.');
@@ -234,10 +235,10 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
   const convo = [...messages];
   const use = (u) => onUsage?.(u);
   for (let round = 0; round < 3; round++) {
-    const { msg, calls, usage } = await toolRound({ provider, model, key, convo, tools });
+    const { msg, calls, usage } = await toolRound({ provider, model, key, convo, tools, signal });
     if (usage) use(usage);
     if (!calls.length) {
-      await streamFinal({ provider, model, key, convo, onChunk, onUsage: use });
+      await streamFinal({ provider, model, key, convo, onChunk, onUsage: use, signal });
       return;
     }
     convo.push(msg);
@@ -259,16 +260,17 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
   }
   // rounds exhausted — stream final summary
   convo.push({ role: 'user', content: 'Summarize the tool results above concisely.' });
-  await streamFinal({ provider, model, key, convo, onChunk, onUsage: use });
+  await streamFinal({ provider, model, key, convo, onChunk, onUsage: use, signal });
 }
 
 // One non-streaming round: returns {msg, calls:[{id,name,args}], usage:{prompt,completion}}.
-async function toolRound({ provider, model, key, convo, tools }) {
+async function toolRound({ provider, model, key, convo, tools, signal }) {
   if (provider === 'ollama') {
     const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: convo, tools: tools.length ? tools : undefined, stream: false })
+      body: JSON.stringify({ model, messages: convo, tools: tools.length ? tools : undefined, stream: false }),
+      signal
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}: is 'ollama serve' running?`);
     const data = await res.json();
@@ -283,7 +285,7 @@ async function toolRound({ provider, model, key, convo, tools }) {
       : null;
     return { msg: { role: 'assistant', content: msg.content || '', tool_calls: (msg.tool_calls || []).map((t, i) => ({ id: t.id || `call_ollama_${i}`, type: 'function', function: { name: t.function?.name || '', arguments: JSON.stringify(t.function?.arguments || {}) } })) }, calls, usage };
   }
-  const res = await openAiPost({ provider, model, key, body: { messages: convo, tools: tools.length ? tools : undefined, stream: false } });
+  const res = await openAiPost({ provider, model, key, body: { messages: convo, tools: tools.length ? tools : undefined, stream: false }, signal });
   const data = await res.json();
   const msg = data?.choices?.[0]?.message;
   if (!msg) throw new Error(`${provider}: empty response`);
@@ -298,12 +300,13 @@ function safeParseArgs(a) {
   try { return JSON.parse(a); } catch { return {}; }
 }
 
-async function streamFinal({ provider, model, key, convo, onChunk, onUsage }) {
+async function streamFinal({ provider, model, key, convo, onChunk, onUsage, signal }) {
   if (provider === 'ollama') {
     const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: convo, stream: true })
+      body: JSON.stringify({ model, messages: convo, stream: true }),
+      signal
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}`);
     for await (const line of sseLines(res)) {
@@ -320,7 +323,7 @@ async function streamFinal({ provider, model, key, convo, onChunk, onUsage }) {
     }
     return;
   }
-  const res2 = await openAiPost({ provider, model, key, body: { messages: convo, stream: true } });
+  const res2 = await openAiPost({ provider, model, key, body: { messages: convo, stream: true }, signal });
   await parseOpenAI(res2, onChunk, onUsage);
 }
 
