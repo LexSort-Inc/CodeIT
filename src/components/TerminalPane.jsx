@@ -9,7 +9,7 @@ export default function TerminalPane({ cwd }) {
   async function runBg() {
     if (!window.codeit?.tasksStart || busy || !cmd.trim()) return;
     const r = await window.codeit.tasksStart(cmd);
-    setLog((l) => [...l, `$ ${cmd}`, `→ background task ${r.id} — watch it in the Tasks tab.`]);
+    setLog((l) => [...l, `$ ${cmd}`, r.error ? `→ ${r.error}` : `→ background task ${r.id} — watch it in the Tasks tab.`]);
   }
   async function run() {
     if (!window.codeit || busy || !cmd.trim()) return;

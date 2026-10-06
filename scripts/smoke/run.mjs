@@ -11,6 +11,7 @@ const { costUSD, fmtCost, fmtTokens, fmtMs } = await import('../../src/llm/prici
 const { canonProvider, providerLabel, PROVIDERS } = await import('../../src/llm/router.js');
 const { modelFacts, splitReady, isDead, markDead, isDeadFailure, isTempDeadFailure, isErrorBubble, KEY_LINKS } = await import('../../src/llm/models.js');
 const { buildSystemPrompt, matchSkills } = await import('../../src/projects/context.js');
+const { containedIn, validChatId, safeExternalUrl, validToolId, validToolKey, validScope, validKeyName, findOnPath, resolveBin } = await import('../../electron/safety.js');
 
 let pass = 0;
 let fail = 0;
@@ -80,6 +81,74 @@ ok(sys.includes('exactly that identity'), 'identity instruction');
 const sysDefault = buildSystemPrompt({ notes: '', pinsText: '', skills: [] });
 ok(sysDefault.includes('an AI coding assistant'), 'default identity fallback');
 ok(matchSkills([{ name: 'Commit Helper', description: 'writes commits', id: 'a', triggers: ['commit'] }], 'please commit this', new Set(['a'])).length === 1, 'skill match');
+
+// safety: IPC boundary helpers (electron/safety.js)
+ok(containedIn('/a/b', 'c'), 'contained: plain child');
+ok(containedIn('/a/b', '/a/b/c'), 'contained: absolute child inside');
+ok(containedIn('/a/b', '.'), 'root itself allowed');
+ok(!containedIn('/a/b', '../c'), 'blocked: parent traversal');
+ok(!containedIn('/a/b', 'c/../../d'), 'blocked: traversal after child');
+ok(!containedIn('/a/b', '/a/c'), 'blocked: absolute outside');
+ok(!containedIn('/a/b', ''), 'blocked: empty path');
+ok(!containedIn('', 'x'), 'blocked: empty root');
+ok(!containedIn(null, 'x'), 'blocked: null root');
+ok(containedIn('/a/b', 'sub\\dir'), 'contained: backslash child');
+
+ok(validChatId('p_abc-123_X9'), 'chat id ok');
+ok(!validChatId('../evil'), 'chat id traversal blocked');
+ok(!validChatId('a/b'), 'chat id separator blocked');
+ok(!validChatId('a'.repeat(65)), 'chat id too long');
+ok(!validChatId(''), 'chat id empty');
+ok(!validChatId('__proto__'), 'chat id proto blocked');
+ok(!validChatId(42), 'chat id non-string blocked');
+
+ok(safeExternalUrl('https://example.com/a') === 'https://example.com/a', 'https allowed');
+ok(safeExternalUrl('http://localhost:3000') !== null, 'http allowed');
+ok(safeExternalUrl('file:///C:/Windows/System32/cmd.exe') === null, 'file: blocked');
+ok(safeExternalUrl('javascript:alert(1)') === null, 'javascript: blocked');
+ok(safeExternalUrl('smb://host/share') === null, 'smb: blocked');
+ok(safeExternalUrl('ms-settings:display') === null, 'ms-settings: blocked');
+ok(safeExternalUrl('not a url') === null, 'garbage blocked');
+ok(safeExternalUrl('') === null, 'empty url blocked');
+
+ok(validToolId('mcp:memory'), 'tool id ok');
+ok(validToolId('skill:commit-helper'), 'tool id skill ok');
+ok(!validToolId('__proto__'), 'tool id proto blocked');
+ok(!validToolId('MCP:Memory'), 'tool id must be lowercase');
+ok(!validToolId('a'.repeat(65)), 'tool id too long');
+ok(!validToolId('has space'), 'tool id space blocked');
+
+ok(validToolKey('mcp:memory.read_file'), 'tool key ok');
+ok(validToolKey('mcp:context7.resolve-library-id'), 'tool key dashes ok');
+ok(!validToolKey('__proto__'), 'tool key proto blocked');
+ok(!validToolKey('.leading-dot'), 'tool key leading dot blocked');
+ok(!validToolKey(''), 'tool key empty blocked');
+
+const knownProjects = new Set(['p_x1', 'p_y2']);
+ok(validScope('global', knownProjects), 'scope global');
+ok(validScope(null, knownProjects), 'scope null');
+ok(validScope(undefined, knownProjects), 'scope undefined');
+ok(validScope('p_x1', knownProjects), 'scope known project');
+ok(!validScope('p_unknown', knownProjects), 'scope unknown project blocked');
+ok(!validScope('__proto__', knownProjects), 'scope proto blocked');
+ok(!validScope('a/b', knownProjects), 'scope separator blocked');
+ok(validScope('p_z9', null), 'scope unchecked mode for non-project ids');
+
+ok(validKeyName('groq'), 'key name groq');
+ok(validKeyName('openrouter'), 'key name openrouter');
+ok(!validKeyName('Groq'), 'key name must be lowercase');
+ok(!validKeyName('__proto__'), 'key name proto blocked');
+ok(!validKeyName('a'.repeat(33)), 'key name too long');
+ok(!validKeyName('bad name'), 'key name space blocked');
+
+ok(findOnPath('definitely-not-a-real-binary-xyz.exe') === null, 'findOnPath missing binary -> null');
+if (process.platform === 'win32') {
+  const rb = resolveBin('opencode');
+  ok(typeof rb === 'string' && !rb.toLowerCase().endsWith('.cmd'), `resolveBin never returns a .cmd shim (${rb})`);
+  ok(!rb.toLowerCase().endsWith('opencode.cmd'), 'resolveBin opencode not the cmd shim');
+} else {
+  ok(resolveBin('opencode') === 'opencode', 'resolveBin passthrough off windows');
+}
 
 console.log(`\nsmoke: ${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);

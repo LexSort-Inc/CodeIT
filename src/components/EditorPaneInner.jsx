@@ -16,9 +16,14 @@ export default function EditorPaneInner({ file, setFile, onAttach, openRef, proj
   const isPinned = project?.pinned?.includes(file?.path);
   async function save() {
     if (!file || !window.codeit) return;
-    await window.codeit.fsWrite(file.path, content);
-    setStatus(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(() => setStatus(''), 2000);
+    try {
+      await window.codeit.fsWrite(file.path, content);
+      setStatus(`Saved ${new Date().toLocaleTimeString()}`);
+      setTimeout(() => setStatus(''), 2000);
+    } catch (err) {
+      setStatus(`Save failed: ${String((err && err.message) || err).slice(0, 120)}`);
+      setTimeout(() => setStatus(''), 6000);
+    }
   }
   async function togglePin() {
     if (!project || !file) return;

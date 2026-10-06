@@ -2,7 +2,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('codeit', {
   openWorkspace: () => ipcRenderer.invoke('workspace:open'),
-  getRoot: () => ipcRenderer.invoke('workspace:root'),
   fsList: () => ipcRenderer.invoke('fs:list'),
   fsRead: (p) => ipcRenderer.invoke('fs:read', p),
   fsWrite: (p, c) => ipcRenderer.invoke('fs:write', p, c),
@@ -14,7 +13,6 @@ contextBridge.exposeInMainWorld('codeit', {
   opencodeRun: (dir, model, prompt) => ipcRenderer.invoke('opencode:run', dir, model, prompt),
   opencodeCancel: (dir) => ipcRenderer.invoke('opencode:cancel', dir),
   appPaths: () => ipcRenderer.invoke('app:paths'),
-  llmPing: (host) => ipcRenderer.invoke('llm:ping', host),
   // projects — organized multi-project workflow (local folders + GitHub repos)
   projectsList: () => ipcRenderer.invoke('projects:list'),
   projectsAddLocal: () => ipcRenderer.invoke('projects:add-local'),
@@ -30,7 +28,6 @@ contextBridge.exposeInMainWorld('codeit', {
   projectsClone: (repo, parentDir) => ipcRenderer.invoke('projects:clone', repo, parentDir),
   gitInfo: () => ipcRenderer.invoke('git:info'),
   githubRepos: (limit) => ipcRenderer.invoke('github:repos', limit),
-  githubAuth: () => ipcRenderer.invoke('github:auth'),
   // secrets (OS keychain) — never localStorage
   keysGet: () => ipcRenderer.invoke('keys:get'),
   keysSet: (name, value) => ipcRenderer.invoke('keys:set', name, value),

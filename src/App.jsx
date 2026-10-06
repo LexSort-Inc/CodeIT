@@ -105,7 +105,11 @@ export default function App() {
   async function saveNotes() {
     if (!active || !window.codeit?.fsWrite) return;
     const sep = window.navigator?.platform?.includes('Win') ? '\\' : '/';
-    await window.codeit.fsWrite(`${active.path}${sep}.codeit${sep}CONTEXT.md`, notes);
+    try {
+      await window.codeit.fsWrite(`${active.path}${sep}.codeit${sep}CONTEXT.md`, notes);
+    } catch (err) {
+      console.error('[codeit] notes save failed:', err);
+    }
   }
 
   async function removeProject() {

@@ -6,10 +6,54 @@ const fsSync = require('fs');
 const { exec, execFile } = require('child_process');
 const { CATALOG } = require('./catalog');
 const mcp = require('./mcp');
+const { containedIn, validChatId, safeExternalUrl, validToolId, validToolKey, validScope, validKeyName, resolveBin } = require('./safety');
 
 const isDev = !app.isPackaged;
 let mainWindow;
 let workspaceRoot = os.homedir();
+
+// Defense in depth: only our own frame may call IPC. Webview guests never get
+// this preload, and a navigated/compromised main frame must not reach us either.
+{
+  const realHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) =>
+    realHandle(channel, (event, ...args) => {
+      const url = (event && event.senderFrame && event.senderFrame.url) || '';
+      const ok = !url || url.startsWith('file://') || url.startsWith('app://') ||
+        url.startsWith('http://127.0.0.1:5173') || url.startsWith('http://localhost:5173');
+      if (!ok) return Promise.reject(new Error(`blocked IPC from unexpected frame: ${String(url).slice(0, 120)}`));
+      return listener(event, ...args);
+    });
+}
+
+// File access is limited to the active workspace plus any project folder.
+async function isAllowedPath(p) {
+  if (!(typeof p === 'string' && p)) return false;
+  const roots = [workspaceRoot];
+  try {
+    const data = await loadProjects();
+    for (const proj of data.projects) if (proj && proj.path) roots.push(proj.path);
+  } catch { /* store unreadable — workspace root alone */ }
+  return roots.some((r) => containedIn(r, p));
+}
+
+// Windows CreateProcess cannot run .cmd shims (CVE-2024-27980); resolveBin in
+// safety.js maps npm shims to their real exe instead of using shell:true.
+let opencodeBin = null;
+function getOpencodeBin() {
+  if (!opencodeBin) opencodeBin = resolveBin('opencode');
+  return opencodeBin;
+}
+
+// Kill a shell-spawned tree on Windows (cmd.exe → npx/node children).
+function killTree(proc) {
+  if (!proc) return;
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    } else proc.kill('SIGTERM');
+  } catch { /* already gone */ }
+}
 
 // ---------- Projects store (organized multi-project workflow) ----------
 // projects.json in userData: { activeId, projects: [{id,name,kind,path,repo,url,branch,pinned,createdAt,lastOpened}] }
@@ -77,7 +121,8 @@ async function createWindow() {
 
   // open external links in browser, not inside app (except webviews)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    const safe = safeExternalUrl(url);
+    if (safe) shell.openExternal(safe);
     return { action: 'deny' };
   });
 
@@ -89,12 +134,21 @@ async function createWindow() {
   } catch { /* first run */ }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(createWindow).catch((err) => {
+  try { dialog.showErrorBox('CodeIT failed to start', String((err && err.stack) || err).slice(0, 2000)); } catch { /* headless */ }
+  app.quit();
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) createWindow().catch(() => {});
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[codeit] unhandledRejection:', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[codeit] uncaughtException:', err);
 });
 
 // ---------- IPC: single workspace fs (now follows active project) ----------
@@ -103,8 +157,6 @@ ipcMain.handle('workspace:open', async () => {
   if (!res.canceled && res.filePaths[0]) workspaceRoot = res.filePaths[0];
   return workspaceRoot;
 });
-
-ipcMain.handle('workspace:root', () => workspaceRoot);
 
 async function listRecursive(dir, depth = 0, maxDepth = 3) {
   if (depth > maxDepth) return [];
@@ -130,14 +182,24 @@ ipcMain.handle('fs:list', async () => {
 });
 
 ipcMain.handle('fs:read', async (_e, filePath) => {
-  const content = await fs.readFile(filePath, 'utf8');
-  return content.slice(0, 200000); // 200k guard for small local models
+  if (!(await isAllowedPath(filePath))) throw new Error('read denied: path is outside the open projects');
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    return content.slice(0, 200000); // 200k guard for small local models
+  } catch (err) {
+    throw new Error(`read failed: ${String((err && err.message) || err)}`);
+  }
 });
 
 ipcMain.handle('fs:write', async (_e, filePath, content) => {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, 'utf8');
-  return true;
+  if (!(await isAllowedPath(filePath))) throw new Error('write denied: path is outside the open projects');
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, String(content ?? ''), 'utf8');
+    return true;
+  } catch (err) {
+    throw new Error(`write failed: ${String((err && err.message) || err)}`);
+  }
 });
 
 // ---------- IPC: command runner (no native node-pty in v0.1; child_process, cross-platform) ----------
@@ -172,7 +234,16 @@ ipcMain.handle('tasks:start', async (_e, cmd) => {
     t.running = false; t.code = 1; t.out = `[spawn error] ${String(err.message).slice(0, 500)}`;
   }
   TASKS.set(id, t);
-  if (TASKS.size > 20) { const oldest = [...TASKS.keys()][0]; TASKS.delete(oldest); }
+  // Evict only finished tasks; never kill a running job to make room. If all 20
+  // slots are running, refuse honestly instead of silently dropping the oldest.
+  if (TASKS.size >= 20) {
+    const finished = [...TASKS.values()].find((x) => !x.running);
+    if (finished) TASKS.delete(finished.id);
+    else {
+      TASKS.delete(id);
+      return { id: null, cmd: t.cmd, error: 'Too many running tasks (20) — kill one in the Tasks tab, then retry.' };
+    }
+  }
   return { id, cmd: t.cmd };
 });
 ipcMain.handle('tasks:list', async () => [...TASKS.values()].map(taskSnapshot).reverse());
@@ -184,7 +255,7 @@ ipcMain.handle('tasks:tail', async (_e, id) => {
 ipcMain.handle('tasks:kill', async (_e, id) => {
   const t = TASKS.get(id);
   if (!t) return { ok: false };
-  try { t.proc?.kill('SIGTERM'); } catch {}
+  killTree(t.proc);
   setTimeout(() => { try { if (t.running) t.proc?.kill('SIGKILL'); } catch {} }, 3000);
   return { ok: true };
 });
@@ -192,46 +263,45 @@ ipcMain.handle('tasks:kill', async (_e, id) => {
 // ---------- IPC: OpenCode agent (non-interactive run in project dir, killable) ----------
 const opencodeProcs = new Map(); // dir -> ChildProcess
 ipcMain.handle('opencode:run', async (_e, dir, model, prompt) => {
-  const args = ['run', String(prompt || '')];
+  const promptText = String(prompt || '').slice(0, 100000);
+  if (!promptText.trim()) return { ok: false, error: 'empty prompt' };
+  if (dir && !(await isAllowedPath(dir))) return { ok: false, error: 'opencode dir is outside the open projects' };
+  const args = ['run', promptText];
   if (dir) args.push('--dir', String(dir));
   if (model && model !== 'default') args.push('-m', String(model));
   const key = String(dir || 'default');
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
     let child = null;
     try {
-      child = execFile('opencode', args, { cwd: dir || os.homedir(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      child = execFile(getOpencodeBin(), args, { cwd: dir || os.homedir(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
         if (opencodeProcs.get(key) === child) opencodeProcs.delete(key);
         const out = String(stdout || '').slice(0, 20000);
-        if (error && !out) resolve({ ok: false, error: String(stderr || error.message).slice(0, 2000) });
-        else resolve({ ok: true, out });
+        // A failed run must never look successful (SSE error frames proved this bug).
+        if (error) done({ ok: false, error: String(stderr || error.message || 'opencode failed').slice(0, 2000), out });
+        else done({ ok: true, out });
       });
       opencodeProcs.set(key, child);
-      child.on('error', () => {});
+      child.on('error', (err) => {
+        if (opencodeProcs.get(key) === child) opencodeProcs.delete(key);
+        done({ ok: false, error: `opencode failed to start: ${String(err && err.message || err).slice(0, 500)}` });
+      });
     } catch (err) {
-      resolve({ ok: false, error: String(err.message || err).slice(0, 500) });
+      done({ ok: false, error: String(err.message || err).slice(0, 500) });
     }
   });
 });
 ipcMain.handle('opencode:cancel', async (_e, dir) => {
   const child = opencodeProcs.get(String(dir || 'default'));
   if (!child) return { ok: false };
-  try { child.kill('SIGTERM'); } catch {}
+  killTree(child);
   setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 3000);
   return { ok: true };
 });
 
 // ---------- Renderer diagnostics: store paths ----------
 ipcMain.handle('app:paths', async () => ({ userData: app.getPath('userData'), store: storeDir() }));
-
-// ---------- IPC: LLM passthrough ----------
-ipcMain.handle('llm:ping', async (_e, host) => {
-  try {
-    const r = await fetch(`${host || 'http://127.0.0.1:11434'}/api/tags`);
-    return { ok: r.ok, status: r.status };
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-});
 
 // ---------- IPC: projects ----------
 ipcMain.handle('projects:list', async () => {
@@ -276,7 +346,7 @@ ipcMain.handle('projects:remove', async (_e, id) => {
   data.projects = data.projects.filter((x) => x.id !== id);
   if (data.activeId === id) data.activeId = data.projects[0]?.id ?? null;
   await saveProjects(data);
-  try { await fs.unlink(path.join(chatsDir(), `${id}.json`)); } catch { /* no chat yet */ }
+  if (validChatId(id)) try { await fs.unlink(path.join(chatsDir(), `${id}.json`)); } catch { /* no chat yet */ }
   return data;
 });
 
@@ -303,7 +373,7 @@ ipcMain.handle('projects:rename', async (_e, id, name) => {
 ipcMain.handle('projects:pin', async (_e, id, filePath) => {
   const data = await loadProjects();
   const p = data.projects.find((x) => x.id === id);
-  if (!p) return data;
+  if (!p || typeof filePath !== 'string' || !filePath) return data;
   p.pinned = p.pinned || [];
   if (!p.pinned.includes(filePath)) p.pinned.push(filePath);
   await saveProjects(data);
@@ -319,12 +389,14 @@ ipcMain.handle('projects:unpin', async (_e, id, filePath) => {
 });
 
 ipcMain.handle('projects:reveal', async (_e, targetPath) => {
-  shell.showItemInFolder(targetPath || workspaceRoot);
+  const target = typeof targetPath === 'string' && targetPath ? targetPath : workspaceRoot;
+  if (await isAllowedPath(target)) shell.showItemInFolder(target);
   return true;
 });
 
 // Per-project chat history (survives folder moves; stored in userData)
 ipcMain.handle('projects:get-chat', async (_e, id) => {
+  if (!validChatId(id)) return [];
   try {
     const raw = await fs.readFile(path.join(chatsDir(), `${id}.json`), 'utf8');
     return JSON.parse(raw);
@@ -333,6 +405,7 @@ ipcMain.handle('projects:get-chat', async (_e, id) => {
   }
 });
 ipcMain.handle('projects:save-chat', async (_e, id, msgs) => {
+  if (!validChatId(id)) return false;
   await ensureStore();
   // msgs: legacy array, or { threads: [{ id, provider, model, msgs }] }
   let payload = msgs;
@@ -357,12 +430,30 @@ async function loadUsage() {
   } catch { /* first run */ }
   return { events: [] };
 }
+// Parallel threads record usage at once — queue the whole read-modify-write so
+// concurrent events don't overwrite each other, and allowlist event fields
+// (renderer-controlled object never spreads raw into disk).
+let usageChain = Promise.resolve();
 ipcMain.handle('usage:record', async (_e, ev) => {
-  await ensureStore();
-  const d = await loadUsage();
-  d.events.push({ t: new Date().toISOString(), ...(ev || {}) });
-  await fs.writeFile(usageFile(), JSON.stringify({ events: d.events.slice(-2000) }, null, 2));
-  return true;
+  const run = usageChain.then(async () => {
+    await ensureStore();
+    const d = await loadUsage();
+    const src = ev && typeof ev === 'object' ? ev : {};
+    d.events.push({
+      t: new Date().toISOString(),
+      projectId: typeof src.projectId === 'string' ? src.projectId.slice(0, 64) : null,
+      provider: typeof src.provider === 'string' ? src.provider.slice(0, 64) : null,
+      model: typeof src.model === 'string' ? src.model.slice(0, 120) : null,
+      ms: Number(src.ms) || 0,
+      prompt: Number(src.prompt) || 0,
+      completion: Number(src.completion) || 0,
+      ok: !!src.ok
+    });
+    await fs.writeFile(usageFile(), JSON.stringify({ events: d.events.slice(-2000) }, null, 2));
+    return true;
+  });
+  usageChain = run.catch(() => {});
+  return run;
 });
 ipcMain.handle('usage:get', async () => {
   const d = await loadUsage();
@@ -482,10 +573,6 @@ ipcMain.handle('github:repos', async (_e, limit) => {
   all.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return { ok: true, repos: all.slice(0, max) };
 });
-ipcMain.handle('github:auth', async () => {
-  const r = await runBin('gh', ['auth', 'status']);
-  return { ok: r.ok, out: (r.out || r.error || '').slice(0, 1000) };
-});
 ipcMain.handle('projects:clone', async (_e, repoFullName, parentDir) => {
   const clean = String(repoFullName || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
   if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) return { ok: false, error: 'Use OWNER/REPO format, e.g. owner/repo' };
@@ -530,6 +617,7 @@ async function readKeys() {
 }
 ipcMain.handle('keys:get', async () => readKeys());
 ipcMain.handle('keys:set', async (_e, name, value) => {
+  if (!validKeyName(name)) return { ok: false, error: 'invalid key name' };
   await ensureStore();
   let stored = {};
   try { stored = JSON.parse(await fs.readFile(keysFile(), 'utf8')); } catch {}
@@ -571,15 +659,21 @@ ipcMain.handle('tools:catalog', async () => {
   return CATALOG.map((c) => ({ ...c, enabled: projectToolEnabled(state, activeId, c.id) }));
 });
 ipcMain.handle('tools:set-enabled', async (_e, toolId, enabled, scope) => {
+  if (!validToolId(toolId)) return { ok: false, error: 'invalid tool id' };
+  const data = await loadProjects();
+  const known = new Set(data.projects.map((p) => p.id));
+  if (!validScope(scope, known)) return { ok: false, error: 'invalid scope' };
   const state = await loadToolState();
   if (scope && scope !== 'global') {
-    state.projectOverrides[scope] = state.projectOverrides[scope] || {};
-    state.projectOverrides[scope][toolId] = enabled;
-  } else state.enabled[toolId] = enabled;
+    if (!state.projectOverrides || typeof state.projectOverrides !== 'object') state.projectOverrides = {};
+    if (!state.projectOverrides[scope] || typeof state.projectOverrides[scope] !== 'object') state.projectOverrides[scope] = {};
+    state.projectOverrides[scope][toolId] = !!enabled;
+  } else state.enabled[toolId] = !!enabled;
   await saveToolState(state);
   return { ok: true };
 });
 ipcMain.handle('tools:always-allow', async (_e, toolKey) => {
+  if (!validToolKey(toolKey)) return { ok: false, error: 'invalid tool key' };
   const state = await loadToolState();
   if (!state.alwaysAllow.includes(toolKey)) state.alwaysAllow.push(toolKey);
   await saveToolState(state);
@@ -633,15 +727,21 @@ ipcMain.handle('skills:list', async () => {
 ipcMain.handle('tools:call', async (_e, serverId, toolName, toolArgs, approved) => {
   const entry = CATALOG.find((c) => c.id === serverId && c.kind === 'mcp');
   if (!entry) return { ok: false, error: `Unknown tool server ${serverId}` };
+  if (typeof toolName !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(toolName)) return { ok: false, error: 'invalid tool name' };
   const state = await loadToolState();
+  const data = await loadProjects();
+  if (!projectToolEnabled(state, data.activeId, serverId)) {
+    return { ok: false, error: 'Tool server is disabled for this project — enable it in the Extensions tab.' };
+  }
   const toolKey = `${serverId}.${toolName}`;
   const autoOk = entry.risk === 'read' || (approved === 'once') || state.alwaysAllow.includes(toolKey);
   if (!autoOk) {
     return { ok: false, needsApproval: true, serverId, toolName, toolArgs, risk: entry.risk };
   }
+  const args = toolArgs && typeof toolArgs === 'object' && !Array.isArray(toolArgs) ? toolArgs : {};
   const keys = await readKeys();
   try {
-    const result = await mcp.callTool(entry, toolName, toolArgs, { projectDir: workspaceRoot, keys });
+    const result = await mcp.callTool(entry, toolName, args, { projectDir: workspaceRoot, keys });
     return { ok: true, result };
   } catch (err) {
     return { ok: false, error: String(err && err.message || err).slice(0, 2000) };
@@ -663,4 +763,10 @@ ipcMain.handle('tools:server-tools', async (_e, serverId) => {
   }
 });
 
-app.on('before-quit', () => mcp.stopAll());
+app.on('before-quit', () => {
+  // No orphaned children: MCP servers, background tasks, opencode runs.
+  mcp.stopAll();
+  for (const t of TASKS.values()) if (t.running) killTree(t.proc);
+  for (const c of opencodeProcs.values()) killTree(c);
+  opencodeProcs.clear();
+});
