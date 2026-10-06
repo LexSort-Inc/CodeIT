@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { allModels, setLiveModels } from '../llm/models.js';
-import { refreshProviderModels, PROVIDERS } from '../llm/router.js';
+import { refreshProviderModels, PROVIDERS, getKeys } from '../llm/router.js';
 
 // Per-thread model menu: searchable, grouped, with a fact panel
 // (provider / inputs / reasoning / context) like OpenCode Zen's picker.
@@ -22,7 +22,10 @@ export default function ModelPicker({ provider, model, onPick }) {
   const [idx, setIdx] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState('');
+  const [savedKeys, setSavedKeys] = useState({});
   const inputRef = useRef(null);
+
+  useEffect(() => { if (open) getKeys().then(setSavedKeys).catch(() => {}); }, [open]);
 
   async function refreshLive() {
     setRefreshing(true);
@@ -85,8 +88,12 @@ export default function ModelPicker({ provider, model, onPick }) {
                     onMouseEnter={() => setIdx(i)} onClick={() => pick(m)}
                     style={{ ...ROW, background: i === idx ? '#1f6feb33' : 'transparent' }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.agent ? '🤖 OpenCode agent' : m.model}</span>
-                    {m.local && <span className="k">Local</span>}
-                    {m.free && !m.local && <span className="k">Free</span>}
+                    {m.tier === 'local' && <span className="k" title="Runs on this machine — no key, no cost">Local</span>}
+                    {m.tier === 'free' && <span className="k" title="Free tier — needs key, no card">Free</span>}
+                    {m.tier === 'paid' && <span className="k" title="Paid — needs billing on the provider">Paid</span>}
+                    {m.needsKey && (savedKeys[m.keyId]
+                      ? <span title="Key saved ✓" style={{ color: '#3fb950', fontSize: 11 }}>✓</span>
+                      : <span className="k" title={`Needs ${m.keyId} key — add it in Keys`}>key</span>)}
                   </button>
                 ))}
                 {items.length === 0 && <div className="empty">No models match.</div>}
@@ -101,7 +108,8 @@ export default function ModelPicker({ provider, model, onPick }) {
                   <div><div className="muted">Reasoning</div>{sel.reasoning ? 'Allows reasoning' : '—'}</div>
                   <div><div className="muted">Context</div>{sel.context == null ? 'varies' : sel.context.toLocaleString()}</div>
                   <div><div className="muted">Tools</div>{sel.tools ? (sel.agent ? 'agent tools' : 'MCP tools') : 'text-only'}</div>
-                  <div><div className="muted">Key</div>{sel.local ? 'none (local)' : sel.agent ? 'opencode auth' : 'API key in Keys'}</div>
+                  <div><div className="muted">Key</div>{sel.local ? 'none (local)' : sel.agent ? 'opencode auth' : (savedKeys[sel.keyId] ? 'saved ✓' : 'API key in Keys')}</div>
+                  <div><div className="muted">Cost</div>{sel.tier === 'local' ? 'FREE (own hardware)' : sel.tier === 'free' ? 'FREE tier' : 'Paid API'}</div>
                 </div>
               ) : <span className="muted">Pick a model</span>}
             </div>

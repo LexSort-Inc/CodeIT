@@ -35,15 +35,24 @@ const META = {
 export function modelFacts(providerId, model) {
   const p = PROVIDERS.find((x) => x.id === providerId);
   const m = META[String(model)] || {};
+  const id = String(model || '');
+  // Honest cost tier: Local (own hardware) / Free (free tier, no card) / Paid (billing).
+  // OpenRouter: only :free suffix IDs are free; live-list others vary by provider.
+  let tier = 'paid';
+  if (providerId === 'ollama') tier = 'local';
+  else if (providerId === 'groq' || providerId === 'gemini') tier = 'free';
+  else if (providerId === 'openrouter' && (id.endsWith(':free') || !!m.free)) tier = 'free';
   return {
     provider: p ? p.label : providerId,
     model,
     context: m.context ?? null,
     reasoning: !!m.reasoning,
-    free: !!m.free || providerId === 'ollama',
+    tier,
+    free: tier !== 'paid',
     local: providerId === 'ollama',
     tools: p ? !!p.supportsTools : false,
     needsKey: providerId !== 'ollama' && providerId !== 'opencode',
+    keyId: providerId !== 'ollama' && providerId !== 'opencode' ? providerId : null,
   };
 }
 
