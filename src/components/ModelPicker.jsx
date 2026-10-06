@@ -104,7 +104,10 @@ export default function ModelPicker({ provider, model, onPick }) {
     : splitReady(visible, savedKeys, verified);
   // Default view: only what can plausibly answer (verified + key-saved).
   // Needs-key, local, and dead models hide behind "Show all".
-  const listed = showDead || showAll
+  // New users have nothing verified and no keys: auto-expand so the menu
+  // teaches instead of showing a blank list. Narrows back down once usable.
+  const autoAll = !showDead && !showAll && !q.trim() && groups.working.length === 0 && groups.ready.length === 0;
+  const listed = showDead || showAll || autoAll
     ? [...groups.working, ...groups.ready, ...groups.needsKey, ...groups.local]
     : [...groups.working, ...groups.ready];
   const flat = listed;
@@ -131,10 +134,10 @@ export default function ModelPicker({ provider, model, onPick }) {
                 {!showDead && groups.working.map(row)}
                 {!showDead && groups.ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready — untested</div>}
                 {!showDead && groups.ready.map(row)}
-                {!showDead && showAll && groups.needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
-                {!showDead && showAll && groups.needsKey.map(row)}
-                {!showDead && showAll && groups.local.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Local models</div>}
-                {!showDead && showAll && groups.local.map(row)}
+                {!showDead && (showAll || autoAll) && groups.needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key — add in Keys, then Test</div>}
+                {!showDead && (showAll || autoAll) && groups.needsKey.map(row)}
+                {!showDead && (showAll || autoAll) && groups.local.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Local models</div>}
+                {!showDead && (showAll || autoAll) && groups.local.map(row)}
                 {showDead && flat.map(row)}
                 {flat.length === 0 && <div className="empty">No models match.</div>}
                 {!showDead && (
