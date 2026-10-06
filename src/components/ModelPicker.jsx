@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { allModels } from '../llm/models.js';
+import { allModels, setLiveModels } from '../llm/models.js';
+import { refreshProviderModels, PROVIDERS } from '../llm/router.js';
 
 // Per-thread model menu: searchable, grouped, with a fact panel
 // (provider / inputs / reasoning / context) like OpenCode Zen's picker.
@@ -19,7 +20,25 @@ export default function ModelPicker({ provider, model, onPick }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
   const inputRef = useRef(null);
+
+  async function refreshLive() {
+    setRefreshing(true);
+    setRefreshMsg('');
+    let ok = 0;
+    let firstErr = '';
+    for (const p of PROVIDERS) {
+      if (p.id === 'opencode' || p.id === 'anthropic') continue;
+      try {
+        const ids = await refreshProviderModels(p.id);
+        if (ids.length) { setLiveModels(p.id, ids); ok++; }
+      } catch (err) { if (!firstErr) firstErr = `${p.id}: ${String(err.message).slice(0, 80)}`; }
+    }
+    setRefreshMsg(ok ? `Live lists updated (${ok} providers)` : (firstErr || 'Refresh failed'));
+    setRefreshing(false);
+  }
   const list = allModels();
   const items = list.filter((m) => {
     const s = q.trim().toLowerCase();
@@ -53,8 +72,13 @@ export default function ModelPicker({ provider, model, onPick }) {
           <div style={VEIL} onMouseDown={() => setOpen(false)} />
           <div role="listbox" aria-label="Pick model" style={MENU}>
             <div style={{ width: 250, display: 'flex', flexDirection: 'column', maxHeight: 320 }}>
-              <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
-                placeholder="Search models" aria-label="Search models" style={{ margin: 6 }} />
+              <div style={{ display: 'flex', gap: 4, margin: 6 }}>
+                <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
+                  placeholder="Search models" aria-label="Search models" style={{ flex: 1, margin: 0 }} />
+                <button className="btn btn-sm" onClick={refreshLive} disabled={refreshing}
+                  title="Fetch live model lists (Ollama + keyed providers)">↻</button>
+              </div>
+              {(refreshing || refreshMsg) && <div className="muted" style={{ fontSize: 11, padding: '0 8px 4px' }}>{refreshing ? 'Refreshing…' : refreshMsg}</div>}
               <div style={{ overflowY: 'auto', flex: 1 }} onKeyDown={onKey}>
                 {items.map((m, i) => (
                   <button key={`${m.provider}/${m.model}`} role="option" aria-selected={i === idx}

@@ -324,6 +324,37 @@ async function streamFinal({ provider, model, key, convo, onChunk, onUsage }) {
   await parseOpenAI(res2, onChunk, onUsage);
 }
 
+// Live model lists: providers that expose one. Results cached by the picker.
+export async function refreshProviderModels(providerId) {
+  const id = canonProvider(providerId);
+  if (id === 'ollama') {
+    const res = await fetch(`${OLLAMA_HOST}/api/tags`);
+    if (!res.ok) throw new Error(`Ollama ${res.status}: is 'ollama serve' running?`);
+    const data = await res.json();
+    return (data.models || []).map((m) => m.name).filter(Boolean);
+  }
+  if (id === 'opencode') throw new Error('OpenCode uses its own config — pick models there.');
+  if (id === 'anthropic') throw new Error('Anthropic has no list API — see console.anthropic.com for current IDs.');
+  const keys = await getKeys();
+  const key = keys[id];
+  if (!key) { const e = new Error(`Add the ${id} key first.`); e.code = 'NO_KEY'; throw e; }
+  const urls = {
+    groq: 'https://api.groq.com/openai/v1/models',
+    openrouter: 'https://openrouter.ai/api/v1/models',
+    deepseek: 'https://api.deepseek.com/v1/models',
+    gemini: `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,
+  };
+  const url = urls[id];
+  if (!url) throw new Error(`No list endpoint for ${id}.`);
+  const headers = {};
+  if (id !== 'gemini') headers.Authorization = `Bearer ${key}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`${id} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  if (id === 'gemini') return (data.models || []).map((m) => String(m.name || '').replace(/^models\//, '')).filter(Boolean);
+  return (data.data || []).map((m) => m.id).filter(Boolean);
+}
+
 // Models verified (Oct 2026, Ollama native /api/chat) to emit structured tool_calls.
 // qwen2.5-coder:7b and llama3.1:8b emit pseudo-call text instead — warn but allow.
 export function ollamaToolCapable(model) {

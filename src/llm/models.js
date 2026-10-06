@@ -47,7 +47,24 @@ export function modelFacts(providerId, model) {
   };
 }
 
+// Live lists cached in localStorage (refresh button in picker). Static list is fallback.
+function liveCache() {
+  try { return JSON.parse(localStorage.getItem('codeit.liveModels') || '{}'); } catch { return {}; }
+}
+export function getLiveModels(providerId) {
+  const c = liveCache()[providerId];
+  return Array.isArray(c?.models) && c.models.length ? c : null;
+}
+export function setLiveModels(providerId, models) {
+  try {
+    const c = liveCache();
+    c[providerId] = { models, at: new Date().toISOString() };
+    localStorage.setItem('codeit.liveModels', JSON.stringify(c));
+  } catch {}
+}
+
 // Flat searchable list for the picker, provider order preserved.
+// Live-cached providers show live IDs (marked live:true), others show the static list.
 export function allModels() {
   const out = [];
   for (const p of PROVIDERS) {
@@ -55,7 +72,9 @@ export function allModels() {
       out.push({ provider: p.id, model: 'default', ...modelFacts(p.id, 'default'), agent: true });
       continue;
     }
-    for (const m of p.models) out.push({ provider: p.id, model: m, ...modelFacts(p.id, m) });
+    const live = getLiveModels(p.id);
+    const ids = live ? live.models : p.models;
+    for (const m of ids) out.push({ provider: p.id, model: m, ...modelFacts(p.id, m), live: !!live });
   }
   return out;
 }
