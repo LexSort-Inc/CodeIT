@@ -28,7 +28,9 @@ export default function App() {
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage
-  const [filesOpen, setFilesOpen] = useState(false); // files+editor drawer, closed by default
+  const [explorerOpen, setExplorerOpen] = useState(false); // file folder view, closed by default
+  const [editorOpen, setEditorOpen] = useState(false); // editor, closed by default
+  const filesPaneClosed = !explorerOpen && !editorOpen;
   const [toolCount, setToolCount] = useState(0);
   const [zen, setZen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -41,6 +43,7 @@ export default function App() {
 
   function openFile(f) {
     setFile(f);
+    setEditorOpen(true); // opening a file reveals the editor
     editorOpenRef.current?.(f);
     threadEditorRef.current?.(f.path);
   }
@@ -140,7 +143,8 @@ export default function App() {
         <span className="spacer" />
         {active && (
           <span className="row">
-            <button className="btn btn-ghost btn-sm" onClick={() => setFilesOpen(!filesOpen)} title="Toggle files + editor drawer">{filesOpen ? 'Hide files' : 'Files'}</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setExplorerOpen(!explorerOpen)} title="Toggle file folder view" aria-pressed={explorerOpen}>{explorerOpen ? 'Hide files' : 'Files'}</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditorOpen(!editorOpen)} title="Toggle editor" aria-pressed={editorOpen}>{editorOpen ? 'Hide editor' : 'Editor'}</button>
             <Menu label="…">
               <button onClick={() => window.codeit?.projectsReveal(active.path)}>Reveal in Finder/Explorer</button>
               <button onClick={renameProject}>Rename project</button>
@@ -150,7 +154,7 @@ export default function App() {
         )}
         <Settings provider={provider} setProvider={setProvider} model={model} setModel={setModel} toolCount={toolCount} />
       </header>
-      <div className={`grid-projects${filesOpen ? '' : ' files-closed'}`}>
+      <div className={`grid-projects${filesPaneClosed ? ' files-closed' : ''}`}>
         <section className="pane rail" aria-label="Projects and extensions">
           <div className="pane-title tabs">
             <Tabs tabs={['projects', 'extensions', 'usage']} active={railTab} onChange={setRailTab}
@@ -174,14 +178,18 @@ export default function App() {
               openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)} />
           </div>
         </section>
-        <section className="pane files-pane" aria-label="Files and editor">
-          <div className="pane-title">Files {root ? `· ${root}` : ''}</div>
-          <div className="pane-body files">
-            <FileExplorer root={root} setRoot={setRoot} onOpenFile={openFile} refreshKey={refreshKey} activePath={active?.path} />
+        <section className={`pane files-pane${explorerOpen ? '' : ' hide-explorer'}${editorOpen ? '' : ' hide-editor'}`} aria-label="Files and editor">
+          <div className="explorer-block">
+            <div className="pane-title">Files {root ? `· ${root}` : ''}</div>
+            <div className="pane-body files">
+              <FileExplorer root={root} setRoot={setRoot} onOpenFile={openFile} refreshKey={refreshKey} activePath={active?.path} />
+            </div>
           </div>
-          <div className="pane-title">Editor {active?.pinned?.length ? `· 📌${active.pinned.length}` : ''}</div>
-          <div className="pane-body editor">
-            <EditorPaneInner file={file} setFile={setFile} onAttach={setFileContext} openRef={editorOpenRef} project={active} onPinChanged={() => reloadProjects(activeId)} />
+          <div className="editor-block">
+            <div className="pane-title">Editor {active?.pinned?.length ? `· 📌${active.pinned.length}` : ''}</div>
+            <div className="pane-body editor">
+              <EditorPaneInner file={file} setFile={setFile} onAttach={setFileContext} openRef={editorOpenRef} project={active} onPinChanged={() => reloadProjects(activeId)} />
+            </div>
           </div>
         </section>
         <section className="pane side" aria-label="Terminal, notes, web">
@@ -213,7 +221,8 @@ export default function App() {
           actions={[
             { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
             { id: 'search-chats', label: 'Search all chats…', run: () => setSearchOpen(true) },
-            { id: 'files', label: `${filesOpen ? 'Hide' : 'Show'} files + editor`, run: () => setFilesOpen(!filesOpen) },
+            { id: 'files', label: `${explorerOpen ? 'Hide' : 'Show'} file folder view`, run: () => setExplorerOpen(!explorerOpen) },
+            { id: 'editor', label: `${editorOpen ? 'Hide' : 'Show'} editor`, run: () => setEditorOpen(!editorOpen) },
             { id: 'plan', label: `${planMode ? 'Exit' : 'Enter'} plan mode`, run: () => setPlanMode(!planMode) },
             { id: 'terminal', label: 'Open terminal tab', run: () => setRightTab('terminal') },
             { id: 'tasks', label: 'Open background tasks', run: () => setRightTab('tasks') },

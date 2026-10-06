@@ -39,6 +39,8 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 .grid-projects { flex: 1; display: grid; grid-template-columns: 240px minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
 .grid-projects.files-closed { grid-template-columns: 240px minmax(0, 1.6fr) 0 minmax(0, 1.6fr); }
 .grid-projects.files-closed .pane.files-pane { display: none; }
+.explorer-block, .editor-block { display: contents; }
+.pane.files-pane.hide-explorer .explorer-block, .pane.files-pane.hide-editor .editor-block { display: none; }
 @media (max-width: 1300px) { .grid-projects { grid-template-columns: 200px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); } }
 .pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .pane:last-child { border-right: 0; }
