@@ -105,7 +105,14 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const saveTimer = useRef(null);
   const approvalResolve = useRef({});
   const threadCount = useRef(0);
-  const abortRef = useRef(null); // AbortController for the in-flight send (all targets)
+  const abortsRef = useRef(new Map()); // threadId -> AbortController for its in-flight run
+
+  // End a run: drop its controller and free the thread. Single choke point so
+  // a controller can never outlive its run (stale controllers = zombie writes).
+  function endRun(tid) {
+    abortsRef.current.delete(tid);
+    setBusyIds((b) => b.filter((id) => id !== tid));
+  }
 
   const openThreads = threads.filter((t) => !t.archived);
   const active = openThreads.find((t) => t.id === activeId) || openThreads[0] || threads[0];
@@ -136,6 +143,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
             base.provider = provider;
             base.model = model;
             base.errStreak = 0;
+            base.errModel = null;
           }
           return base;
         };
@@ -189,7 +197,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', titledVia: t.titledVia || null, createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null })) };
+      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', titledVia: t.titledVia || null, createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null, errStreak: t.errStreak || 0, errModel: t.errModel || null })) };
       if (window.codeit?.projectsSaveChat) window.codeit.projectsSaveChat(projectId, payload);
       else { try { localStorage.setItem(chatKey(projectId), JSON.stringify(payload)); } catch {} }
     }, 800);
@@ -296,7 +304,9 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   async function buildCtx(text, thread) {
     const identity = thread ? `${thread.model} (via ${thread.provider} inside CodeIT)` : null;
     let pinsText = '';
-    const scopePaths = [...new Set([...(active.scope || []), ...(project?.pinned || [])])].slice(0, 8);
+    // target thread's own pins — never the displayed thread's (broadcast used
+    // to inject whichever thread you happened to be looking at into all targets)
+    const scopePaths = [...new Set([...(thread?.scope || []), ...(project?.pinned || [])])].slice(0, 8);
     if (scopePaths.length && window.codeit?.fsRead) {
       const parts = [];
       for (const p of scopePaths) {
@@ -314,6 +324,11 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   async function runThread(thread, text, sys, opts = {}) {
     const tid = thread.id;
     const planning = opts.planning ?? planMode;
+    // Own controller per run: a re-send on the same thread kills the previous
+    // run instead of two streams writing the same message slot.
+    abortsRef.current.get(tid)?.abort();
+    const ctrl = new AbortController();
+    abortsRef.current.set(tid, ctrl);
     patchThread(tid, {
       updatedAt: new Date().toISOString(),
       ...(thread.title === 'New chat' ? { title: threadTitle(text), titledVia: `${thread.provider}/${thread.model}` } : null),
@@ -327,26 +342,30 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running in project dir…_' }] });
       if (!window.codeit?.opencodeRun) {
         patchThread(tid, { msgs: [...next, { role: 'assistant', content: 'Error: OpenCode engine needs Electron (`npm run dev`).' }] });
-        setBusyIds((b) => b.filter((id) => id !== tid));
+        endRun(tid);
         return;
       }
       const recent = next.slice(-6).map((m) => `${m.role}: ${m.content.slice(0, 2000)}`).join('\n\n');
       const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- RECENT ---\n${recent}`;
       const r = await window.codeit.opencodeRun(project?.path || '', thread.model, prompt);
+      if (abortsRef.current.get(tid) !== ctrl) return; // superseded by a newer run
       patchThread(tid, {
         msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}`, via: `opencode/${thread.model}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
       });
       window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0, ok: r.ok });
       onUsageTick?.();
-      setBusyIds((b) => b.filter((id) => id !== tid));
+      endRun(tid);
       return;
     }
     const t0 = Date.now();
     const use = { prompt: 0, completion: 0 };
     const onUsage = (u) => { use.prompt += u.prompt || 0; use.completion += u.completion || 0; };
-    const withFile = fileContext
-      ? `${text}\n\n--- ATTACHED FILE (${fileContext.path}) ---\n${fileContext.content.slice(0, 12000)}`
+    // file attachment is passed explicitly by the sender — never read the
+    // global prop here (that leaked one column's file into every thread).
+    const file = opts.file || null;
+    const withFile = file
+      ? `${text}\n\n--- ATTACHED FILE (${file.path}) ---\n${file.content.slice(0, 12000)}`
       : text;
     const next = [...thread.msgs, { role: 'user', content: text }];
     const via = `${thread.provider}/${thread.model}`;
@@ -354,6 +373,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     let acc = '';
     patchThread(tid, { msgs: [...next, { role: 'assistant', content: '', via }] });
     const push = (t) => {
+      // drop tokens from a superseded run — it no longer owns this thread
+      if (abortsRef.current.get(tid) !== ctrl) return;
       acc += t;
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
@@ -374,22 +395,36 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         }
         await chatWithTools({
           provider: thread.provider, model: thread.model, messages: history, mcpTools,
-          onChunk: push, onUsage, signal: opts.signal,
+          onChunk: push, onUsage, signal: ctrl.signal,
+          onToolCall: async (call) => {
+            const out = await executeTool(tid, call);
+            if (typeof out === 'string' && (out.startsWith('Tool error:') || out.startsWith('User denied'))) {
+              const e = new Error(out); e.toolFailed = true; throw e;
+            }
+            return out;
+          },
           onToolEvent: (e) => setThreads((cur) => cur.map((x) => x.id === tid
-            ? { ...x, toolLog: [...x.toolLog, `${e.status === 'calling' ? '⚙️' : '✅'} ${e.serverId}.${e.name}`] }
+            ? { ...x, toolLog: [...x.toolLog, `${e.status === 'calling' ? '⚙️' : e.status === 'error' ? '❌' : '✅'} ${e.serverId}.${e.name}`] }
             : x)),
         });
       } else {
         if (!planning && mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
           push(`_Note: ${thread.provider} is text-only here — MCP tools need Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
         }
-        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage, signal: opts.signal });
+        await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage, signal: ctrl.signal });
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
       succeeded = false;
-      const streak = (thread.errStreak || 0) + 1;
-      patchThread(tid, { errStreak: streak });
+      // superseded: a newer run owns this thread now — write nothing
+      if (abortsRef.current.get(tid) !== ctrl) return;
+      const msg = String(err.message || '');
+      const isNoKey = err.code === 'NO_KEY';
+      // Streak tracks the MODEL (not the thread): switching models must not
+      // inherit an old count, and a missing key is not the model failing.
+      const sameModel = thread.errModel === via;
+      const streak = isNoKey ? 0 : (sameModel ? (thread.errStreak || 0) + 1 : 1);
+      patchThread(tid, { errStreak: streak, errModel: via });
       const streakMsg = streak >= 2 ? `\n\n_Failed ${streak}x in a row on this model — pick another from the menu above or fix billing/keys, then resend._` : '';
       if (err && err.name === 'AbortError') {
         setThreads((cur) => cur.map((x) => {
@@ -400,16 +435,24 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         }));
         window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion, ok: false });
         onUsageTick?.();
-        setBusyIds((b) => b.filter((id) => id !== tid));
+        endRun(tid);
         return;
       }
-      const msg = String(err.message || '');
-      if (isDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg);
-      // Temporary states only count after consecutive failures (single 429 spikes happen).
-      else if (streak >= 2 && isTempDeadFailure(msg)) markDead(canonProvider(thread.provider), thread.model, msg, TEMP_DEAD_TTL_MS);
+      // Dead marking is status-gated: permanent ONLY for not-found responses.
+      // 401/403 mean the KEY is wrong — a body saying "does not exist" must
+      // never hide the model permanently (that's how good models vanished).
+      const status = typeof err.status === 'number' ? err.status : 0;
+      const notFound = status === 404 || status === 410
+        || (status >= 400 && status < 500 && status !== 401 && status !== 403 && isDeadFailure(msg));
+      if (notFound) markDead(canonProvider(thread.provider), thread.model, msg);
+      else if (!isNoKey && status !== 401 && status !== 403 && streak >= 2 && isTempDeadFailure(msg)) {
+        markDead(canonProvider(thread.provider), thread.model, msg, TEMP_DEAD_TTL_MS);
+      }
       const hint = err.code === 'NO_KEY' ? String(err.message)
         : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
         : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Groq free tier.`
+        : /failed to fetch|networkerror|network error|load failed/i.test(msg) ? `${msg} — Tip: network problem — check your connection, VPN, or proxy, then resend.`
+        : /\b5\d\d\b/.test(msg) ? `${msg} — Tip: the provider is erroring — wait a minute and retry.`
         : thread.provider === 'ollama' ? `${msg} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`.`
         : `${msg} — Tip: check the key in Keys, or switch the thread to Groq free tier.`;
       setThreads((cur) => cur.map((x) => {
@@ -419,12 +462,13 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         return { ...x, msgs: c };
       }));
     }
+    if (abortsRef.current.get(tid) !== ctrl) return; // superseded mid-run
     const cost = costUSD(thread.model, use.prompt, use.completion);
     if (succeeded) patchThread(tid, { errStreak: 0 });
     patchThread(tid, { lastUsage: { ...use, cost } });
     window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion, ok: succeeded });
     onUsageTick?.();
-    setBusyIds((b) => b.filter((id) => id !== tid));
+    endRun(tid);
   }
 
   async function runToolDirect(thread, spec) {
@@ -441,12 +485,19 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     setBusyIds((b) => [...b, tid]);
     const next = [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: `_Running ${short}.${name}…_` }];
     patchThread(tid, { msgs: next });
-    const out = await executeTool(tid, { serverId: `mcp:${short}`, name, args });
-    patchThread(tid, {
-      msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\``, via: `${thread.provider}/${thread.model}` }],
-      toolLog: [...thread.toolLog, `⚙️ mcp:${short}.${name}`],
-    });
-    setBusyIds((b) => b.filter((id) => id !== tid));
+    try {
+      const out = await executeTool(tid, { serverId: `mcp:${short}`, name, args });
+      patchThread(tid, {
+        msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\``, via: `${thread.provider}/${thread.model}` }],
+        toolLog: [...thread.toolLog, `⚙️ mcp:${short}.${name}`],
+      });
+    } catch (err) {
+      patchThread(tid, {
+        msgs: [...next.slice(0, -1), { role: 'assistant', content: `Tool call failed: ${String(err?.message || err).slice(0, 1000)}`, via: `${thread.provider}/${thread.model}` }],
+      });
+    } finally {
+      setBusyIds((b) => b.filter((id) => id !== tid));
+    }
   }
 
   async function executePlan(thread) {
@@ -471,8 +522,12 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     const t = threads.find((x) => x.id === tid);
     const clean = String(text || '').trim();
     if (!t || !clean || busyIds.includes(tid)) return;
+    // the sending composer consumes any attached file — it must not ride
+    // along into later sends from other threads
+    const file = fileContext || null;
+    if (file) setFileContext?.(null);
     const sys = await buildCtx(clean, t);
-    await runThread(t, clean, sys);
+    await runThread(t, clean, sys, { file });
   }
 
   async function send() {
@@ -486,35 +541,37 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       await runToolDirect(active, text.slice(6).trim());
       return;
     }
-    // consume attached file into each target thread's scope (their own editor context)
-    if (fileContext?.path) {
+    // consume attached file: merge path into each target's scope for future
+    // sends, attach content to THIS send only, then clear the global prop
+    const file = fileContext || null;
+    if (file?.path) {
       for (const t of targets) {
-        patchThread(t.id, { scope: [...new Set([...(t.scope || []), fileContext.path])].slice(0, 20) });
+        patchThread(t.id, { scope: [...new Set([...(t.scope || []), file.path])].slice(0, 20) });
       }
-      setFileContext?.(null);
     }
+    setFileContext?.(null);
     setInput('');
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    try {
-      for (const t of targets) {
-        // per-target system prompt so each model gets its own identity
-        // eslint-disable-next-line no-await-in-loop
-        const sys = await buildCtx(text, t);
-        // eslint-disable-next-line no-await-in-loop
-        await runThread(t, text, sys, { signal: ctrl.signal });
-      }
-    } finally {
-      if (abortRef.current === ctrl) abortRef.current = null;
+    for (const t of targets) {
+      // per-target system prompt so each model gets its own identity
+      // eslint-disable-next-line no-await-in-loop
+      const sys = await buildCtx(text, t);
+      // eslint-disable-next-line no-await-in-loop
+      await runThread(t, text, sys, { file });
     }
   }
 
   function stopAll() {
-    abortRef.current?.abort();
+    // abort every in-flight run, release any thread parked on an approval
+    // dialog (which may be on a non-visible thread), stop the agent runner.
+    for (const ctrl of abortsRef.current.values()) ctrl.abort();
+    // entries stay until each run's AbortError path calls endRun — that's
+    // what renders "_Stopped._" and clears busy without a force-clear race
+    for (const tid of Object.keys(approvalResolve.current)) {
+      if (approvalResolve.current[tid]) resolveApproval(tid, { denied: true });
+    }
     window.codeit?.opencodeCancel(project?.path || '');
-    // runThread completions clear their own busy flags; force-clear in case one is stuck
-    setTimeout(() => setBusyIds([]), 500);
+    // runThread's AbortError path clears each thread's busy flag — no
+    // force-clear (that let a zombie stream race a fresh run's message)
   }
 
   function threadCost(t) {
@@ -575,7 +632,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         )}
         <span className="spacer" />
         <button className="btn btn-sm btn-ghost" onClick={() => setShowHistory(!showHistory)} title="Chat history for this project" aria-pressed={showHistory}>History</button>
-        <button className="btn btn-sm btn-ghost" onClick={() => clearThread(activeId)} title="Clear this thread">Clear</button>
+        <button className="btn btn-sm btn-ghost" onClick={() => clearThread(activeId)} disabled={busy} title="Clear this thread">Clear</button>
       </div>
       {showHistory && (
         <div style={{ borderBottom: '1px solid #30363d', padding: 8, display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '45%', overflowY: 'auto' }}>
@@ -653,7 +710,12 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
           ? <button className="btn btn-danger" onClick={stopAll} title="Stop all running threads">⏹ Stop</button>
           : <button className="btn btn-primary" onClick={send}>{planMode ? 'Plan' : 'Send'}</button>}
       </div>
-      <ToolApproval pending={pendings[activeId] || null} onResolve={(d) => resolveApproval(activeId, d)} />
+      {(() => {
+        // approval may belong to ANY thread (compare/broadcast targets) —
+        // hiding it behind the active tab stranded the promise forever
+        const entry = Object.entries(pendings)[0];
+        return entry ? <ToolApproval pending={entry[1]} onResolve={(d) => resolveApproval(entry[0], d)} /> : null;
+      })()}
     </div>
   );
 }

@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { allModels, setLiveModels, splitReady, deadCount, clearDead } from '../llm/models.js';
 import { refreshProviderModels, PROVIDERS, getKeys } from '../llm/router.js';
 
 // Per-thread model menu: searchable, grouped, with a fact panel
 // (provider / inputs / reasoning / context) like OpenCode Zen's picker.
-const VEIL = { position: 'fixed', inset: 0, zIndex: 60 };
+// The menu portals to <body> as position:fixed — an earlier invisible
+// full-viewport veil (position:fixed inset:0, no background) swallowed every
+// click in the app while open, which is why the right-pane tabs "did nothing".
 const MENU = {
-  position: 'absolute', zIndex: 61, top: '110%', left: 0, display: 'flex',
+  position: 'fixed', zIndex: 61, display: 'flex',
   background: 'var(--bg1, #161b22)', border: '1px solid var(--line, #30363d)',
   borderRadius: 8, overflow: 'hidden', boxShadow: '0 8px 32px #000a',
 };
@@ -24,7 +27,48 @@ export default function ModelPicker({ provider, model, onPick }) {
   const [refreshMsg, setRefreshMsg] = useState('');
   const [savedKeys, setSavedKeys] = useState({});
   const [verified, setVerified] = useState(new Set());
+  const [anchor, setAnchor] = useState(null); // trigger rect while open
   const inputRef = useRef(null);
+  const wrapRef = useRef(null); // trigger wrapper (inside the app)
+  const menuRef = useRef(null); // portal'd menu (on body)
+
+  function toggle(e) {
+    if (open) { setOpen(false); return; }
+    setAnchor(e.currentTarget.getBoundingClientRect());
+    setOpen(true);
+  }
+
+  // Close on outside mousedown / Escape / resize via real document listeners —
+  // no overlay, so every click outside passes through to the app underneath.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (wrapRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  function menuPos() {
+    if (!anchor) return MENU;
+    const W = 424; // 250 list + 170 facts + border
+    const H = 440;
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - W - 8));
+    const below = anchor.bottom + 6;
+    const above = anchor.top - H - 6;
+    const top = below + H > window.innerHeight && above > 8 ? Math.max(8, above) : below;
+    return { ...MENU, left, top };
+  }
+  function onResize() { setOpen(false); }
 
   useEffect(() => {
     if (!open) return;
@@ -111,16 +155,14 @@ export default function ModelPicker({ provider, model, onPick }) {
     ? [...groups.working, ...groups.ready, ...groups.needsKey, ...groups.local]
     : [...groups.working, ...groups.ready];
   const flat = listed;
-  const sel = flat[idx] ?? items[idx];
+  const sel = flat[idx] ?? null; // never fall back to a different list (fact panel showed the wrong model)
   return (
-    <div style={{ position: 'relative' }}>
-      <button className="btn btn-sm" onClick={() => setOpen(!open)} title={`${provider}/${model} — pick model for this thread`} aria-haspopup="listbox" aria-expanded={open}>
+    <div style={{ position: 'relative' }} ref={wrapRef}>
+      <button className="btn btn-sm" onClick={toggle} title={`${provider}/${model} — pick model for this thread`} aria-haspopup="listbox" aria-expanded={open}>
         {provider === 'opencode' ? '🤖 ' : ''}{String(model).length > 24 ? String(model).slice(0, 23) + '…' : model} ▾
       </button>
-      {open && (
-        <>
-          <div style={VEIL} onMouseDown={() => setOpen(false)} />
-          <div role="listbox" aria-label="Pick model" style={MENU}>
+      {open && anchor && createPortal(
+        <div ref={menuRef} role="listbox" aria-label="Pick model" style={menuPos()}>
             <div style={{ width: 250, display: 'flex', flexDirection: 'column', maxHeight: 320 }}>
               <div style={{ display: 'flex', gap: 4, margin: 6 }}>
                 <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
@@ -175,8 +217,8 @@ export default function ModelPicker({ provider, model, onPick }) {
                 </div>
               ) : <span className="muted">Pick a model</span>}
             </div>
-          </div>
-        </>
+          </div>,
+        document.body
       )}
     </div>
   );

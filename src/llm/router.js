@@ -73,6 +73,32 @@ async function* sseLines(res) {
   }
 }
 
+// HTTP error with `.status` attached — the dead-model logic in ChatPane gates
+// permanent marking on this (404/410 only; never 401/403/5xx).
+async function httpErr(provider, res, fallback) {
+  let body = '';
+  try { body = (await res.text()).slice(0, 300); } catch { /* body gone */ }
+  const e = new Error(`${provider} ${res.status}: ${body || fallback}`);
+  e.status = res.status;
+  return e;
+}
+
+// Parse one SSE payload; null on keep-alive/garbage lines.
+function sseJson(data) {
+  try { return JSON.parse(data); } catch { return null; }
+}
+
+// Providers signal fatal errors INSIDE 200-OK streams. Ignoring them made
+// failed runs record ok:true and award "verified" checks to broken models.
+function frameErr(provider, json) {
+  if (!json) return null;
+  const err = json.error
+    || (json.type === 'error' ? json.error : null)
+    || (json.promptFeedback?.blockReason ? { message: `blocked: ${json.promptFeedback.blockReason}` } : null);
+  if (!err) return null;
+  return new Error(`${provider} stream error: ${typeof err === 'string' ? err : String(err.message || JSON.stringify(err)).slice(0, 300)}`);
+}
+
 // Stream chat; onChunk(token), onUsage({prompt, completion}). Throws with .code = 'NO_KEY' | HTTP error.
 export async function streamChat({ provider, model, messages, onChunk, onUsage, signal }) {
   provider = canonProvider(provider);
@@ -83,18 +109,19 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage, 
       body: JSON.stringify({ model, messages, stream: true }),
       signal
     });
-    if (!res.ok) throw new Error(`Ollama ${res.status}: is 'ollama serve' running?`);
+    if (!res.ok) throw await httpErr('Ollama', res, "is 'ollama serve' running?");
     for await (const line of sseLines(res)) {
       const t = line.trim();
       if (!t.startsWith('data:')) continue;
       const data = t.slice(5).trim();
       if (data === '[DONE]') break;
-      try {
-        const json = JSON.parse(data);
-        const tok = json?.choices?.[0]?.delta?.content || '';
-        if (tok) onChunk(tok);
-        if (json?.usage) onUsage?.({ prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 });
-      } catch { /* keep-alive */ }
+      const json = sseJson(data);
+      if (!json) continue;
+      const fe = frameErr('Ollama', json);
+      if (fe) throw fe;
+      const tok = json?.choices?.[0]?.delta?.content || '';
+      if (tok) onChunk(tok);
+      if (json?.usage) onUsage?.({ prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 });
     }
     return;
   }
@@ -131,23 +158,24 @@ export async function streamChat({ provider, model, messages, onChunk, onUsage, 
   if (provider === 'openrouter') { headers.Authorization = `Bearer ${key}`; headers['HTTP-Referer'] = 'https://codeit.app'; }
 
   const res = await fetch(conf.url, { method: 'POST', headers, body: JSON.stringify(conf.map(messages)), signal });
-  if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  await conf.parse(res, onChunk, onUsage);
+  if (!res.ok) throw await httpErr(provider, res, 'request failed');
+  await conf.parse(res, onChunk, onUsage, provider);
 }
 
 function toGemini(messages) {
   return { contents: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })), systemInstruction: messages.find((m) => m.role === 'system') ? { parts: [{ text: messages.find((m) => m.role === 'system').content }] } : undefined };
 }
-async function parseGemini(res, onChunk, onUsage) {
+async function parseGemini(res, onChunk, onUsage, provider = 'gemini') {
   for await (const line of sseLines(res)) {
     const t = line.trim();
     if (!t.startsWith('data:')) continue;
-    try {
-      const json = JSON.parse(t.slice(5));
-      const tok = json?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-      if (tok) onChunk(tok);
-      if (json?.usageMetadata) onUsage?.({ prompt: json.usageMetadata.promptTokenCount || 0, completion: json.usageMetadata.candidatesTokenCount || 0 });
-    } catch { /* keep-alive */ }
+    const json = sseJson(t.slice(5));
+    if (!json) continue;
+    const fe = frameErr(provider, json);
+    if (fe) throw fe;
+    const tok = json?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+    if (tok) onChunk(tok);
+    if (json?.usageMetadata) onUsage?.({ prompt: json.usageMetadata.promptTokenCount || 0, completion: json.usageMetadata.candidatesTokenCount || 0 });
   }
 }
 async function streamAnthropic({ model, key, messages, onChunk, onUsage, signal }) {
@@ -158,34 +186,36 @@ async function streamAnthropic({ model, key, messages, onChunk, onUsage, signal 
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model, max_tokens: 4096, system: sys?.content, messages: turns, stream: true })
   });
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw await httpErr('anthropic', res, 'request failed');
   let pin = 0;
   let pout = 0;
   for await (const line of sseLines(res)) {
     const t = line.trim();
     if (!t.startsWith('data:')) continue;
-    try {
-      const json = JSON.parse(t.slice(5));
-      const tok = json?.delta?.text || '';
-      if (tok) onChunk(tok);
-      if (json?.message?.usage) pin += json.message.usage.input_tokens || 0;
-      if (json?.usage) pout += json.usage.output_tokens || 0;
-    } catch { /* keep-alive */ }
+    const json = sseJson(t.slice(5));
+    if (!json) continue;
+    const fe = frameErr('anthropic', json);
+    if (fe) throw fe;
+    const tok = json?.delta?.text || '';
+    if (tok) onChunk(tok);
+    if (json?.message?.usage) pin += json.message.usage.input_tokens || 0;
+    if (json?.usage) pout += json.usage.output_tokens || 0;
   }
   if (pin || pout) onUsage?.({ prompt: pin, completion: pout });
 }
-async function parseOpenAI(res, onChunk, onUsage) {
+async function parseOpenAI(res, onChunk, onUsage, provider = 'openai-compatible') {
   for await (const line of sseLines(res)) {
     const t = line.trim();
     if (!t.startsWith('data:')) continue;
     const data = t.slice(5).trim();
     if (data === '[DONE]') break;
-    try {
-      const json = JSON.parse(data);
-      const tok = json?.choices?.[0]?.delta?.content || '';
-      if (tok) onChunk(tok);
-      if (json?.usage) onUsage?.({ prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 });
-    } catch { /* keep-alive */ }
+    const json = sseJson(data);
+    if (!json) continue;
+    const fe = frameErr(provider, json);
+    if (fe) throw fe;
+    const tok = json?.choices?.[0]?.delta?.content || '';
+    if (tok) onChunk(tok);
+    if (json?.usage) onUsage?.({ prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 });
   }
 }
 
@@ -204,7 +234,7 @@ async function openAiPost({ provider, model, key, body, signal }) {
   if (provider !== 'ollama') headers.Authorization = `Bearer ${key}`;
   if (provider === 'openrouter') headers['HTTP-Referer'] = 'https://codeit.app';
   const res = await fetch(urls[provider], { method: 'POST', headers, body: JSON.stringify({ model, ...body }), signal });
-  if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw await httpErr(provider, res, 'request failed');
   return res;
 }
 
@@ -216,8 +246,13 @@ function toOpenAiTools(mcpTools) {
   }));
 }
 
-export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolEvent, onUsage, signal }) {
+export async function chatWithTools({ provider, model, messages, mcpTools, onChunk, onToolCall, onToolEvent, onUsage, signal }) {
   provider = canonProvider(provider);
+  if (typeof onToolCall !== 'function') {
+    const e = new Error('chatWithTools requires onToolCall({serverId,name,args}) -> string');
+    e.code = 'ENGINE';
+    throw e;
+  }
   if (provider === 'opencode') {
     const e = new Error('OpenCode runs via the agent runner, not the MCP loop.');
     e.code = 'OPENCODE_ENGINE';
@@ -247,12 +282,14 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
       const serverId = `mcp:${serverShort}`;
       onToolEvent?.({ status: 'calling', serverId, name: rest.join('__'), args: c.args });
       let result = '';
+      let failed = false;
       try {
         result = await onToolCall({ serverId, name: rest.join('__'), args: c.args });
       } catch (err) {
         result = `Tool error: ${String(err && err.message || err).slice(0, 1000)}`;
+        failed = true;
       }
-      onToolEvent?.({ status: 'done', serverId, name: rest.join('__') });
+      onToolEvent?.({ status: failed ? 'error' : 'done', serverId, name: rest.join('__') });
       convo.push(provider === 'ollama'
         ? { role: 'tool', content: String(result).slice(0, 8000) }
         : { role: 'tool', tool_call_id: c.id, content: String(result).slice(0, 8000) });
@@ -272,7 +309,7 @@ async function toolRound({ provider, model, key, convo, tools, signal }) {
       body: JSON.stringify({ model, messages: convo, tools: tools.length ? tools : undefined, stream: false }),
       signal
     });
-    if (!res.ok) throw new Error(`Ollama ${res.status}: is 'ollama serve' running?`);
+    if (!res.ok) throw await httpErr('Ollama', res, "is 'ollama serve' running?");
     const data = await res.json();
     const msg = data?.message || {};
     const calls = (msg.tool_calls || []).map((t, i) => ({
@@ -308,23 +345,23 @@ async function streamFinal({ provider, model, key, convo, onChunk, onUsage, sign
       body: JSON.stringify({ model, messages: convo, stream: true }),
       signal
     });
-    if (!res.ok) throw new Error(`Ollama ${res.status}`);
+    if (!res.ok) throw await httpErr('Ollama', res, "is 'ollama serve' running?");
     for await (const line of sseLines(res)) {
       const t = line.trim();
       if (!t) continue;
-      try {
-        const json = JSON.parse(t);
-        const tok = json?.message?.content || '';
-        if (tok) onChunk(tok);
-        if (json?.done && (json?.prompt_eval_count || json?.eval_count)) {
-          onUsage?.({ prompt: json.prompt_eval_count || 0, completion: json.eval_count || 0 });
-        }
-      } catch { /* keep-alive */ }
+      const json = sseJson(t);
+      if (!json) continue;
+      if (json.error) throw new Error(`Ollama stream error: ${String(json.error).slice(0, 300)}`);
+      const tok = json?.message?.content || '';
+      if (tok) onChunk(tok);
+      if (json?.done && (json?.prompt_eval_count || json?.eval_count)) {
+        onUsage?.({ prompt: json.prompt_eval_count || 0, completion: json.eval_count || 0 });
+      }
     }
     return;
   }
   const res2 = await openAiPost({ provider, model, key, body: { messages: convo, stream: true }, signal });
-  await parseOpenAI(res2, onChunk, onUsage);
+  await parseOpenAI(res2, onChunk, onUsage, provider);
 }
 
 // Key check: minimal live call per provider. Chat providers send 'hi' to the
