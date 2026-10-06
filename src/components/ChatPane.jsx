@@ -331,9 +331,12 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
-      const hint = err.code === 'NO_KEY'
-        ? String(err.message)
-        : `Error: ${err.message} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`, or add a free cloud key.`;
+      const msg = String(err.message || '');
+      const hint = err.code === 'NO_KEY' ? String(err.message)
+        : /model_not_found|does not exist|model_not_found/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu and pick a current one.`
+        : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Ollama/Groq free tier.`
+        : thread.provider === 'ollama' ? `${msg} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`.`
+        : `${msg} — Tip: check the key in Keys, or switch the thread to Ollama (local, no key).`;
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
         const c = [...x.msgs];

@@ -2,7 +2,8 @@
 // Key: exact model id. Local engines cost $0 (own hardware).
 const PRICES = {
   // Groq (free tier keys still meter at list price for display)
-  'llama-3.3-70b-versatile': { in: 0.59, out: 0.79 },
+  'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
+  'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
   'llama-3.1-8b-instant': { in: 0.05, out: 0.08 },
   // DeepSeek
   'deepseek-chat': { in: 0.27, out: 1.1 },
