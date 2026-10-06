@@ -498,7 +498,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         ) : (
           active.msgs.map((m, i) => (
             <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
-              <div className="role">{m.role === 'assistant' ? `assistant · ${m.via || `${active.provider}/${active.model}`}` : m.role}</div>
+              <div className="role">{m.role === 'assistant' ? (m.via || `${active.provider}/${active.model}`) : m.role}</div>
               {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
             </div>
           ))
