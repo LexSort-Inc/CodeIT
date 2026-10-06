@@ -92,16 +92,22 @@ export default function ModelPicker({ provider, model, onPick }) {
   }
 
   const [showDead, setShowDead] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [deadN, setDeadN] = useState(0);
   useEffect(() => { if (open) setDeadN(deadCount()); }, [open]);
   const visible = showDead ? allModels(true).filter((m) => {
     const s = q.trim().toLowerCase();
     return !s || `${m.model} ${m.provider}`.toLowerCase().includes(s);
   }) : items;
-  const { working, ready, needsKey, local } = showDead
+  const groups = showDead
     ? { working: visible, ready: [], needsKey: [], local: [] }
     : splitReady(visible, savedKeys, verified);
-  const flat = showDead ? visible : [...working, ...ready, ...needsKey, ...local];
+  // Default view: only what can plausibly answer (verified + key-saved).
+  // Needs-key, local, and dead models hide behind "Show all".
+  const listed = showDead || showAll
+    ? [...groups.working, ...groups.ready, ...groups.needsKey, ...groups.local]
+    : [...groups.working, ...groups.ready];
+  const flat = listed;
   const sel = flat[idx] ?? items[idx];
   return (
     <div style={{ position: 'relative' }}>
@@ -121,16 +127,23 @@ export default function ModelPicker({ provider, model, onPick }) {
               </div>
               {(refreshing || refreshMsg) && <div className="muted" style={{ fontSize: 11, padding: '0 8px 4px' }}>{refreshing ? 'Refreshing…' : refreshMsg}</div>}
               <div style={{ overflowY: 'auto', flex: 1 }} onKeyDown={onKey}>
-                {!showDead && working.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>✓ Verified working</div>}
-                {!showDead && working.map(row)}
-                {!showDead && ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready — untested</div>}
-                {!showDead && ready.map(row)}
-                {!showDead && needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
-                {!showDead && needsKey.map(row)}
-                {!showDead && local.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Local models</div>}
-                {!showDead && local.map(row)}
+                {!showDead && groups.working.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>✓ Verified working</div>}
+                {!showDead && groups.working.map(row)}
+                {!showDead && groups.ready.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Ready — untested</div>}
+                {!showDead && groups.ready.map(row)}
+                {!showDead && showAll && groups.needsKey.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Needs key</div>}
+                {!showDead && showAll && groups.needsKey.map(row)}
+                {!showDead && showAll && groups.local.length > 0 && <div className="muted" style={{ fontSize: 10, padding: '4px 8px 0', textTransform: 'uppercase' }}>Local models</div>}
+                {!showDead && showAll && groups.local.map(row)}
                 {showDead && flat.map(row)}
                 {flat.length === 0 && <div className="empty">No models match.</div>}
+                {!showDead && (
+                  <div style={{ padding: '4px 8px', fontSize: 11 }}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setShowAll(!showAll)} title="Show models that need a key, local models, and anything else">
+                      {showAll ? 'Show working only' : 'Show all'}
+                    </button>
+                  </div>
+                )}
                 {!showDead && deadN > 0 && (
                   <div style={{ padding: '4px 8px', fontSize: 11 }}>
                     <button className="btn btn-sm btn-ghost" onClick={() => setShowDead(true)}>{deadN} not working — show</button>
