@@ -20,7 +20,7 @@ function newThread(provider, model, n) {
     id: `t${Date.now().toString(36)}${n}`,
     provider, model, title: 'New chat',
     createdAt: now, updatedAt: now, archived: false,
-    msgs: [{ role: 'assistant', content: WELCOME, via: `${provider}/${model}` }],
+    msgs: [{ role: 'assistant', content: WELCOME }],
     toolLog: [], scope: [], editorPath: null, lastUsage: null, planned: false,
   };
 }
@@ -255,8 +255,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   }
 
   function clearThread(id) {
-    const t = threads.find((x) => x.id === id);
-    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME, via: t ? `${t.provider}/${t.model}` : undefined }], toolLog: [], planned: false, lastUsage: null });
+    patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME }], toolLog: [], planned: false, lastUsage: null });
   }
 
   function toggleSelect(id) {
