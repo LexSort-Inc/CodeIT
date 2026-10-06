@@ -4,7 +4,7 @@ import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
-import { markDead, isDeadFailure } from '../llm/models.js';
+import { markDead, isDeadFailure, isDead } from '../llm/models.js';
 
 const WELCOME = 'CodeIT ready. Pick a model from the menu above — free-tier Groq/Gemini need only a key. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
@@ -127,7 +127,16 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       else { try { saved = JSON.parse(localStorage.getItem(chatKey(projectId))); } catch { saved = null; } }
       let list = null;
       if (saved && Array.isArray(saved.threads) && saved.threads.length) {
-        const fresh = (t) => ({ ...newThread(canonProvider(t.provider) || provider, t.model || model, 0), ...t, provider: canonProvider(t.provider) || provider });
+        const fresh = (t) => {
+          const base = { ...newThread(canonProvider(t.provider) || provider, t.model || model, 0), ...t, provider: canonProvider(t.provider) || provider };
+          // Proven-dead model? Keep history, switch the live model to working defaults.
+          if (isDead(base.provider, base.model)) {
+            base.provider = provider;
+            base.model = model;
+            base.errStreak = 0;
+          }
+          return base;
+        };
         const open = saved.threads.filter((t) => !t.archived).slice(0, MAX_THREADS).map((t) => ({
           ...fresh(t),
           msgs: Array.isArray(t.msgs) && t.msgs.length ? t.msgs : [{ role: 'assistant', content: WELCOME }],
