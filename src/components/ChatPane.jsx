@@ -459,6 +459,32 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const est = input.trim() ? estimate(input, active.model) : null;
   const lastAssistant = [...active.msgs].reverse().find((m) => m.role === 'assistant');
 
+  function enterCompare() {
+    if (compare) { setCompare(false); return; }
+    // need at least 2 visible threads: select all open ones if fewer chosen
+    if (openThreads.filter((t) => selected.has(t.id)).length < 2) {
+      setSelected(new Set(openThreads.map((t) => t.id)));
+    }
+    setCompare(true);
+  }
+
+  if (!project) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>No project selected</div>
+        <div style={{ fontSize: 13, opacity: 0.7, maxWidth: 340 }}>
+          Chats live inside projects. Add a local folder with <strong>+ Folder</strong> or clone a repo
+          with <strong>+ GitHub</strong> in the Projects rail to start chatting.
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.6, maxWidth: 340 }}>
+          Cloud models need their key first — open <strong>Keys</strong> in the top bar. Ollama works with no key.
+        </div>
+      </div>
+    );
+  }
+
+  const compareThreads = openThreads.filter((t) => selected.has(t.id));
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       <div className="threadbar" role="tablist" aria-label="Threads">
@@ -477,7 +503,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         ))}
         {openThreads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
         {openThreads.length > 1 && (
-          <button className="btn btn-sm btn-ghost" onClick={() => setCompare(!compare)} title="Compare threads side by side" aria-pressed={compare}>
+          <button className="btn btn-sm btn-ghost" onClick={enterCompare} title="Side-by-side view of the selected threads" aria-pressed={compare}>
             {compare ? 'Single' : 'Compare'}
           </button>
         )}
@@ -514,18 +540,26 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         {mcpTools.length > 0 && <span>🧰{mcpTools.length}</span>}
         {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
       </div>
-      <div className="messages" role="log" aria-live="polite" aria-label="Chat messages">
-        {compare && openThreads.length > 1 ? (
-          openThreads.filter((t) => selected.has(t.id)).map((t) => {
-            const last = [...t.msgs].reverse().find((m) => m.role === 'assistant');
-            const who = last?.via || `${t.provider}/${t.model}`;
-            return (
-              <div key={t.id} className="bubble assistant" style={{ alignSelf: 'stretch', maxWidth: '100%' }}>
-                <div className="role">{who}{threadCost(t) ? ` · ${threadCost(t)}` : ''}</div>
-                {last ? last.content.slice(0, 2000) : '(no response yet)'}
+      <div className="messages" role="log" aria-live="polite" aria-label="Chat messages" style={compare && compareThreads.length > 1 ? { flexDirection: 'row', gap: 8 } : undefined}>
+        {compare && compareThreads.length > 1 ? (
+          compareThreads.map((t) => (
+            <div key={t.id} style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, borderRight: '1px solid #30363d', paddingRight: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, position: 'sticky', top: 0, background: '#0d1117', padding: '2px 0' }}>
+                {t.provider}/{shortModel(t.model)}{threadCost(t) ? ` · ${threadCost(t)}` : ''}{busyIds.includes(t.id) ? ' …' : ''}
               </div>
-            );
-          })
+              {t.msgs.map((m, i) => (
+                <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`} style={{ maxWidth: '100%' }}>
+                  <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
+                  {m.content || (busyIds.includes(t.id) && i === t.msgs.length - 1 ? '…' : '')}
+                </div>
+              ))}
+              {t.toolLog.length > 0 && (
+                <div className="toollog">
+                  {t.toolLog.map((x, i) => <div key={i}>{x}</div>)}
+                </div>
+              )}
+            </div>
+          ))
         ) : (
           active.msgs.map((m, i) => (
             <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
