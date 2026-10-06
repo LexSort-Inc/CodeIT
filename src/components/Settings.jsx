@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { PROVIDERS, getKeys, setKey, testProviderKey } from '../llm/router.js';
 import { KEY_LINKS } from '../llm/models.js';
+import { modelsForSelect } from '../llm/store.js';
 
 const KEY_FIELDS = [
   { id: 'gemini', label: 'gemini' },
@@ -14,7 +15,7 @@ const KEY_FIELDS = [
 // App-level selects are DEFAULTS for new threads; each thread has its own picker.
 export default function Settings({ provider, setProvider, model, setModel, toolCount }) {
   const [keys, setKeysState] = useState({});
-  const [show, setShow] = useState(true); // keys stay visible until dismissed
+  const [show, setShow] = useState(false); // first-run keys live in the setup guide
   const [secured, setSecured] = useState(false);
   const [tests, setTests] = useState({}); // id -> { phase, msg }
 
@@ -34,11 +35,11 @@ export default function Settings({ provider, setProvider, model, setModel, toolC
   return (
     <div className="row" title="Defaults for new threads — each thread keeps its own model">
       <span className="muted" style={{ fontSize: 11 }}>Defaults</span>
-      <select aria-label="Default provider for new threads" value={provider} onChange={(e) => { setProvider(e.target.value); setModel(PROVIDERS.find((p) => p.id === e.target.value).models[0]); }}>
+      <select aria-label="Default provider for new threads" value={provider} onChange={(e) => setProvider(e.target.value)}>
         {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}{p.supportsTools ? '' : ' (no tools)'}</option>)}
       </select>
       <select aria-label="Default model for new threads" value={model} onChange={(e) => setModel(e.target.value)}>
-        {PROVIDERS.find((p) => p.id === provider).models.map((m) => <option key={m} value={m}>{m}</option>)}
+        {modelsForSelect(provider, model).map((m) => <option key={m} value={m}>{m}</option>)}
       </select>
       {toolCount > 0 && (
         <span title={`${toolCount} MCP tools available to ${info.supportsTools ? 'this provider' : 'tool-capable providers (this one is text-only)'}`}

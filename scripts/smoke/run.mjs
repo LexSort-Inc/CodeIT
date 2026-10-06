@@ -9,9 +9,10 @@ globalThis.localStorage = {
 
 const { costUSD, fmtCost, fmtTokens, fmtMs } = await import('../../src/llm/pricing.js');
 const { canonProvider, providerLabel, PROVIDERS } = await import('../../src/llm/router.js');
-const { modelFacts, splitReady, isDead, markDead, isDeadFailure, isTempDeadFailure, isErrorBubble, KEY_LINKS } = await import('../../src/llm/models.js');
+const { modelFacts, splitReady, isDead, markDead, clearDead, isDeadFailure, isTempDeadFailure, isErrorBubble, KEY_LINKS } = await import('../../src/llm/models.js');
 const { buildSystemPrompt, matchSkills } = await import('../../src/projects/context.js');
 const { containedIn, validChatId, safeExternalUrl, validToolId, validToolKey, validScope, validKeyName, findOnPath, resolveBin } = await import('../../electron/safety.js');
+const uiStore = await import('../../src/llm/store.js');
 
 let pass = 0;
 let fail = 0;
@@ -149,6 +150,31 @@ if (process.platform === 'win32') {
 } else {
   ok(resolveBin('opencode') === 'opencode', 'resolveBin passthrough off windows');
 }
+
+// store: unified defaults + UI persistence (src/llm/store.js)
+localStorage.removeItem('codeit.defaults');
+clearDead();
+ok(uiStore.loadDefaults().provider === 'groq' && uiStore.loadDefaults().model === 'openai/gpt-oss-20b', 'store factory defaults');
+uiStore.saveDefaults('gemini', 'gemini-3.8-flash');
+ok(uiStore.loadDefaults().provider === 'gemini', 'store saves + loads defaults');
+uiStore.saveDefaults('ghost-provider', 'whatever');
+ok(uiStore.loadDefaults().provider === 'groq', 'store rejects unknown provider -> factory');
+uiStore.saveDefaults('gemini', 'gemini-3.8-flash');
+markDead('gemini', 'gemini-3.8-flash', '404');
+ok(uiStore.loadDefaults().provider === 'groq', 'store rejects dead default -> factory');
+const groq = PROVIDERS.find((p) => p.id === 'groq');
+ok(groq.models.length > 1, 'groq has a second model to fall back to');
+ok(uiStore.defaultModelFor('nope') === 'openai/gpt-oss-20b', 'defaultModelFor unknown provider -> factory model');
+markDead('groq', groq.models[0], '404');
+ok(uiStore.defaultModelFor('groq') === groq.models.find((m) => m !== groq.models[0]), 'defaultModelFor skips dead');
+const sel = uiStore.modelsForSelect('groq', groq.models[0]);
+ok(sel.includes(groq.models[0]), 'modelsForSelect keeps current selection visible');
+ok(sel.includes(groq.models[1]), 'modelsForSelect lists live models');
+ok(uiStore.uiGet('nope', 'fb') === 'fb', 'uiGet fallback');
+uiStore.uiSet('rightTab', 'tasks');
+ok(uiStore.uiGet('rightTab', null) === 'tasks', 'uiSet/uiGet roundtrip');
+clearDead();
+localStorage.removeItem('codeit.defaults');
 
 console.log(`\nsmoke: ${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);

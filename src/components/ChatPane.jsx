@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable, canonProvider } from '../llm/router.js';
+import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable, canonProvider, getKeys } from '../llm/router.js';
 import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
 import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
-import { markDead, isDeadFailure, isTempDeadFailure, isDead, isErrorBubble, TEMP_DEAD_TTL_MS } from '../llm/models.js';
+import { markDead, isDeadFailure, isTempDeadFailure, isDead, isErrorBubble, TEMP_DEAD_TTL_MS, allModels, splitReady } from '../llm/models.js';
 
 const WELCOME = 'CodeIT ready. Pick a model from the menu above — free-tier Groq/Gemini need only a key. Attach file context with the +File button, pin files, or enable tools in Extensions.';
 const MAX_THREADS = 4;
@@ -234,6 +234,30 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     setThreads((cur) => [...cur, t]);
     setActiveId(t.id);
     setSelected((s) => new Set([...s, t.id]));
+  }
+
+  // One-click Build + QA: second thread on a different model that can actually
+  // answer (verified/ready first, free-tier fallback), side-by-side compare on.
+  async function addQaThread() {
+    if (openThreads.length >= MAX_THREADS) return;
+    let alt = null;
+    try {
+      const keys = await getKeys();
+      const verified = new Set();
+      try {
+        const u = await window.codeit?.usageGet?.();
+        for (const e of u?.events || []) if (e.ok) verified.add(`${e.provider}/${e.model}`);
+      } catch { /* no usage yet */ }
+      const g = splitReady(allModels(), keys, verified);
+      const pool = [...g.working, ...g.ready, ...g.needsKey.filter((m) => m.tier === 'free')];
+      alt = pool.find((m) => !(m.provider === active.provider && m.model === active.model)) || null;
+    } catch { /* keys unavailable — fall back to current defaults */ }
+    threadCount.current += 1;
+    const t = { ...newThread(alt?.provider || provider, alt?.model || model, threadCount.current), title: 'QA' };
+    setThreads((cur) => [...cur, t]);
+    setActiveId(t.id);
+    setSelected(new Set([active.id, t.id]));
+    setCompare(true);
   }
 
   function archiveThread(id) {
@@ -625,6 +649,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
           </span>
         ))}
         {openThreads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
+        {openThreads.length < MAX_THREADS && (
+          <button className="btn btn-sm btn-ghost" onClick={addQaThread}
+            title="Build + QA: add a second thread on a different working model and open side-by-side compare">+ QA</button>
+        )}
         {openThreads.length > 1 && (
           <button className="btn btn-sm btn-ghost" onClick={enterCompare} title="Side-by-side view of the selected threads" aria-pressed={compare}>
             {compare ? 'Single' : 'Compare'}

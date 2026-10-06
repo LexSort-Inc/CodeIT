@@ -12,24 +12,30 @@ import TasksPane from './components/TasksPane.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import ChatSearch from './components/ChatSearch.jsx';
+import Onboarding from './components/Onboarding.jsx';
 import { Tabs, Menu } from './components/ui.jsx';
+import { getKeys } from './llm/router.js';
+import { loadDefaults, saveDefaults, defaultModelFor, uiGet, uiSet } from './llm/store.js';
 import './styles.css';
 
 export default function App() {
-  const [provider, setProvider] = useState('groq');
-  const [model, setModel] = useState('openai/gpt-oss-20b');
+  // defaults survive restarts (unified store); dead IDs fall back to factory
+  const [defaults, setDefaultsState] = useState(loadDefaults);
+  const provider = defaults.provider;
+  const model = defaults.model;
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
-  const [rightTab, setRightTab] = useState('terminal'); // terminal | tasks | notes | web
+  const [rightTab, setRightTab] = useState(() => uiGet('rightTab', 'terminal')); // terminal | tasks | notes | web
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage
-  const [explorerOpen, setExplorerOpen] = useState(false); // file folder view, closed by default
-  const [editorOpen, setEditorOpen] = useState(false); // editor, closed by default
+  const [railTab, setRailTab] = useState(() => uiGet('railTab', 'projects')); // projects | extensions | usage
+  const [explorerOpen, setExplorerOpen] = useState(() => uiGet('explorer', false)); // file folder view, closed by default
+  const [editorOpen, setEditorOpen] = useState(() => uiGet('editor', false)); // editor, closed by default
+  const [onboard, setOnboard] = useState(() => !uiGet('onboarded', false));
   const filesPaneClosed = !explorerOpen && !editorOpen;
   const [toolCount, setToolCount] = useState(0);
   const [zen, setZen] = useState(false);
@@ -40,6 +46,33 @@ export default function App() {
   const [usageTick, setUsageTick] = useState(0);
   const editorOpenRef = useRef(null);
   const threadEditorRef = useRef(null); // ChatPane registers: record opened file on active thread
+
+  function setProvider(p) {
+    setDefaultsState((cur) => { const next = { provider: p, model: defaultModelFor(p) }; saveDefaults(next.provider, next.model); return next; });
+  }
+  function setModel(m) {
+    setDefaultsState((cur) => { const next = { ...cur, model: m }; saveDefaults(next.provider, next.model); return next; });
+  }
+
+  // pane/tab state survives restarts
+  useEffect(() => uiSet('rightTab', rightTab), [rightTab]);
+  useEffect(() => uiSet('railTab', railTab), [railTab]);
+  useEffect(() => uiSet('explorer', explorerOpen), [explorerOpen]);
+  useEffect(() => uiSet('editor', editorOpen), [editorOpen]);
+
+  // first run: show setup guide until dismissed — users who already have a key
+  // (upgrades, reinstalls) skip it silently on first paint
+  useEffect(() => {
+    if (!onboard) return;
+    getKeys().then((k) => {
+      if (Object.values(k).some((v) => v)) { uiSet('onboarded', true); setOnboard(false); }
+    }).catch(() => {});
+  }, [onboard]); // eslint-disable-line react-hooks/exhaustive-deps
+  function closeOnboard() {
+    uiSet('onboarded', true);
+    setOnboard(false);
+    setTimeout(() => document.getElementById('codeit-chat')?.focus(), 50);
+  }
 
   function openFile(f) {
     setFile(f);
@@ -252,10 +285,12 @@ export default function App() {
         </section>
       </div>
       <StatusBar project={active} git={git} toolCount={toolCount} usageTick={usageTick} zen={zen} setZen={setZen} onPalette={() => setPaletteOpen(true)} />
+      {onboard && <Onboarding onClose={closeOnboard} />}
       {searchOpen && <ChatSearch onClose={() => setSearchOpen(false)} onJump={jumpToChat} />}
       {paletteOpen && (
         <CommandPalette onClose={() => setPaletteOpen(false)}
           actions={[
+            { id: 'setup', label: 'Open setup guide (add keys, verify)', run: () => setOnboard(true) },
             { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
             { id: 'search-chats', label: 'Search all chats…', run: () => setSearchOpen(true) },
             { id: 'files', label: `${explorerOpen ? 'Hide' : 'Show'} file folder view`, run: () => setExplorerOpen(!explorerOpen) },
