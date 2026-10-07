@@ -10,26 +10,26 @@ export const KEY_LINKS = {
   brave: { url: 'https://api-dashboard.search.brave.com/register', note: 'Search API' },
 };
 
-// Per-model display facts. Context in tokens; null = varies (agent default).
+// Per-model display facts (IDs verified Oct 2026 vs provider docs + live OpenRouter /models).
+// Context in tokens; null = varies (agent default).
 const META = {
   'qwen2.5-coder:7b': { context: 32768 },
   'qwen2.5-coder:14b': { context: 32768 },
   'llama3.2:3b': { context: 131072 },
   'qwen3:8b': { context: 32768, reasoning: true },
   'mistral:7b-instruct-v0.3-q4_0': { context: 32768 },
+  'gemini-2.5-flash': { context: 1048576 },
   'gemini-2.0-flash': { context: 1048576 },
-  'gemini-1.5-flash': { context: 1048576 },
-  'gemini-3.8-flash': { context: 1048576 },
-  'gemini-3.5-flash': { context: 1048576 },
   'openai/gpt-oss-20b': { context: 131072 },
   'openai/gpt-oss-120b': { context: 131072 },
-  'llama-3.1-8b-instant': { context: 131072 },
+  'qwen/qwen3.6-27b': { context: 131072 },
   'deepseek-chat': { context: 65536 },
-  'deepseek-coder': { context: 65536 },
-  'meta-llama/llama-3.3-70b-instruct:free': { context: 131072, free: true },
-  'google/gemma-2-9b-it:free': { context: 8192, free: true },
-  'claude-sonnet-4-6': { context: 200000 },
-  'claude-opus-4-6': { context: 200000, reasoning: true },
+  'deepseek-reasoner': { context: 65536, reasoning: true },
+  'openrouter/free': { context: null, free: true },
+  'cohere/north-mini-code:free': { context: 131072, free: true },
+  'google/gemma-4-26b-a4b-it:free': { context: 131072, free: true },
+  'claude-sonnet-5-5': { context: 1000000 },
+  'claude-opus-5-5': { context: 1000000, reasoning: true },
   'claude-haiku-4-5': { context: 200000 },
   default: { context: null },
 };
