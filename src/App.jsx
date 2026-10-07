@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ChatPane from './components/ChatPane.jsx';
+import UncensoredPane from './components/UncensoredPane.jsx';
 import FileExplorer from './components/FileExplorer.jsx';
 import TerminalPane from './components/TerminalPane.jsx';
 import WebviewDock from './components/WebviewDock.jsx';
@@ -26,7 +27,11 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
-  const [rightTab, setRightTab] = useState(() => uiGet('rightTab', 'terminal')); // terminal | tasks | notes | web
+  const [rightTab, setRightTab] = useState(() => {
+    const saved = uiGet('rightTab', 'terminal');
+    if (saved === 'webdock') return 'web';
+    return ['terminal', 'tasks', 'notes', 'web'].includes(saved) ? saved : 'terminal';
+  }); // terminal | tasks | notes | web
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
@@ -36,6 +41,7 @@ export default function App() {
   const [explorerOpen, setExplorerOpen] = useState(() => uiGet('explorer', false)); // file folder view, closed by default
   const [editorOpen, setEditorOpen] = useState(() => uiGet('editor', false)); // editor, closed by default
   const [onboard, setOnboard] = useState(() => !uiGet('onboarded', false));
+  const [chatMode, setChatMode] = useState(() => uiGet('chatMode', 'work')); // work (Arena) | uncensored
   const filesPaneClosed = !explorerOpen && !editorOpen;
   const [toolCount, setToolCount] = useState(0);
   const [zen, setZen] = useState(false);
@@ -59,6 +65,11 @@ export default function App() {
   useEffect(() => uiSet('railTab', railTab), [railTab]);
   useEffect(() => uiSet('explorer', explorerOpen), [explorerOpen]);
   useEffect(() => uiSet('editor', editorOpen), [editorOpen]);
+  useEffect(() => uiSet('chatMode', chatMode), [chatMode]);
+  useEffect(() => {
+    if (chatMode !== 'uncensored') return;
+    setTimeout(() => document.getElementById('codeit-uncensored')?.focus(), 50);
+  }, [chatMode]);
 
   // first run: show setup guide until dismissed — users who already have a key
   // (upgrades, reinstalls) skip it silently on first paint
@@ -238,14 +249,23 @@ export default function App() {
                 : <UsagePane refreshKey={refreshKey} />}
           </div>
         </section>
-        <section className="pane" aria-label="Chat">
-          <div className="pane-title">Chat — multi-model {fileContext ? `· +${fileContext.path.split(/[\\/]/).pop()}` : ''}</div>
+        <section className="pane" aria-label={chatMode === 'work' ? 'Chat' : 'Uncensored chat'}>
+          <div className="pane-title tabs">
+            <Tabs tabs={['work', 'uncensored']} active={chatMode} onChange={setChatMode}
+              labels={{ work: 'Arena', uncensored: 'Uncensored' }} />
+            {chatMode === 'work' && fileContext && <span className="muted">📎 {fileContext.path.split(/[/\\]/).pop()}</span>}
+          </div>
           <div className="pane-body">
-            <ChatPane provider={provider} model={model} fileContext={fileContext} setFileContext={setFileContext}
-              project={active} projectNotes={notes} onToolCount={setToolCount} planMode={planMode} setPlanMode={setPlanMode}
-              onUsageTick={() => setUsageTick((t) => t + 1)} onThreadSwitch={onThreadSwitch}
-              registerThreadEditor={(fn) => { threadEditorRef.current = fn; }}
-              openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)} />
+            <div className="chatpane-host" style={chatMode === 'work' ? undefined : { display: 'none' }}>
+              <ChatPane provider={provider} model={model} fileContext={fileContext} setFileContext={setFileContext}
+                project={active} projectNotes={notes} onToolCount={setToolCount} planMode={planMode} setPlanMode={setPlanMode}
+                onUsageTick={() => setUsageTick((t) => t + 1)} onThreadSwitch={onThreadSwitch}
+                registerThreadEditor={(fn) => { threadEditorRef.current = fn; }}
+                openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)} />
+            </div>
+            <div className="chatpane-host" style={chatMode === 'uncensored' ? undefined : { display: 'none' }}>
+              <UncensoredPane />
+            </div>
           </div>
         </section>
         <section className={`pane files-pane${explorerOpen ? '' : ' hide-explorer'}${editorOpen ? '' : ' hide-editor'}`} aria-label="Files and editor">
@@ -291,6 +311,7 @@ export default function App() {
         <CommandPalette onClose={() => setPaletteOpen(false)}
           actions={[
             { id: 'setup', label: 'Open setup guide (add keys, verify)', run: () => setOnboard(true) },
+            { id: 'uncensored', label: chatMode === 'uncensored' ? 'Back to Arena' : 'Open uncensored chat (local, private)', run: () => setChatMode(chatMode === 'uncensored' ? 'work' : 'uncensored') },
             { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
             { id: 'search-chats', label: 'Search all chats…', run: () => setSearchOpen(true) },
             { id: 'files', label: `${explorerOpen ? 'Hide' : 'Show'} file folder view`, run: () => setExplorerOpen(!explorerOpen) },

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { streamChat, chatWithTools, getEnabledMcpTools, PROVIDERS, ollamaToolCapable, canonProvider, getKeys } from '../llm/router.js';
 import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 import { matchSkills, buildSystemPrompt } from '../projects/context.js';
@@ -6,13 +6,11 @@ import ToolApproval from './ToolApproval.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { markDead, isDeadFailure, isTempDeadFailure, isDead, isErrorBubble, TEMP_DEAD_TTL_MS, allModels, splitReady } from '../llm/models.js';
 
-const WELCOME = 'CodeIT ready. Pick a model from the menu above — free-tier Groq/Gemini need only a key. Attach file context with the +File button, pin files, or enable tools in Extensions.';
-const MAX_THREADS = 4;
+const WELCOME = 'CodeIT ready. Pick a model above — free-tier Groq/Gemini only need a key. Add more columns for multi-model compare.';
+const MAX_COLS = 4;
 const PLANNER_SUFFIX = '\n\nYou are in PLAN MODE. Do not write code or call tools. Output: 1) files to touch, 2) numbered steps, 3) risks. End with "Awaiting approval — say Execute to proceed."';
 
-function chatKey(projectId) {
-  return `codeit.chat.${projectId || 'default'}`;
-}
+function chatKey(projectId) { return `codeit.chat.${projectId || 'default'}`; }
 
 function newThread(provider, model, n) {
   const now = new Date().toISOString();
@@ -22,6 +20,7 @@ function newThread(provider, model, n) {
     createdAt: now, updatedAt: now, archived: false,
     msgs: [{ role: 'assistant', content: WELCOME }],
     toolLog: [], scope: [], editorPath: null, lastUsage: null, planned: false,
+    errStreak: 0, errModel: null,
   };
 }
 
@@ -32,45 +31,8 @@ function threadTitle(text) {
 
 function shortModel(m) {
   const s = String(m || '');
-  return s.length > 22 ? s.slice(0, 21) + '…' : s;
-}
-
-// One compare column: full thread + its own composer (independent sends).
-function CompareCol({ thread: t, busy, cost, onSend }) {
-  const [draft, setDraft] = useState('');
-  function go() {
-    const text = draft.trim();
-    if (!text || busy) return;
-    setDraft('');
-    onSend(text);
-  }
-  return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8, borderRight: '1px solid #30363d', paddingRight: 8, minHeight: 0 }}>
-      <div style={{ fontSize: 12, fontWeight: 600 }}>
-        {t.provider}/{shortModel(t.model)}{cost ? ` · ${cost}` : ''}{busy ? ' …' : ''}
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
-        {t.msgs.map((m, i) => (
-          <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`} style={{ maxWidth: '100%' }}>
-            <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
-            {m.content || (busy && i === t.msgs.length - 1 ? '…' : '')}
-          </div>
-        ))}
-        {t.toolLog.length > 0 && (
-          <div className="toollog">
-            {t.toolLog.map((x, i) => <div key={i}>{x}</div>)}
-          </div>
-        )}
-      </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input value={draft} onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } }}
-          placeholder={`Ask ${shortModel(t.model)}…`} aria-label={`Message ${t.model}`}
-          style={{ flex: 1, fontSize: 12 }} disabled={busy} />
-        <button className="btn btn-sm btn-primary" onClick={go} disabled={busy || !draft.trim()}>{busy ? '…' : 'Send'}</button>
-      </div>
-    </div>
-  );
+  if (s.includes('/')) { const p = s.split('/'); return p[p.length - 1].replace(':free', '').slice(0, 20); }
+  return s.length > 20 ? s.slice(0, 19) + '…' : s;
 }
 
 function mcpResultToText(result) {
@@ -89,44 +51,316 @@ function estimate(text, model) {
   return { tokens, cost: c };
 }
 
-export default function ChatPane({ provider, model, fileContext, setFileContext, project, projectNotes,
-  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor, openThreadId, onThreadOpened }) {
+function renderBubbleContent(content) {
+  if (!content) return null;
+  // Check if content contains markdown images: ![alt](url)
+  const imgRegex = /!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = imgRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(content.substring(lastIndex, match.index));
+    }
+    const alt = match[1] || 'generated image';
+    const src = match[2];
+    parts.push(
+      <div key={match.index} style={{ margin: '8px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--line)', display: 'block' }}
+        />
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <a
+            href={src}
+            download={`codeit-${Date.now()}.jpg`}
+            target="_blank"
+            rel="noreferrer"
+            className="col-btn col-btn-primary"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            💾 Save Image
+          </a>
+          <a
+            href={src}
+            target="_blank"
+            rel="noreferrer"
+            className="col-btn"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            ↗ Open Full Size
+          </a>
+        </div>
+      </div>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    parts.push(content.substring(lastIndex));
+  }
+
+  return parts.length ? parts : content;
+}
+
+// ─── Slash commands catalogue ─────────────────────────────────────────────────
+const SLASH_COMMANDS = [
+  { cmd: '/image',  label: '🖼️  Generate image',  desc: 'Create a free AI image with Flux — e.g. /image a neon cat' },
+  { cmd: '/plan',   label: '📋 Plan mode',         desc: 'Model plans steps first, you approve before it executes' },
+  { cmd: '/clear',  label: '🗑️  Clear chat',        desc: 'Wipe all messages in this column' },
+  { cmd: '/retry',  label: '↻  Retry last',        desc: 'Re-run your previous prompt' },
+  { cmd: '/tool',   label: '🧰 List MCP tools',    desc: 'Show which MCP tools are enabled in this session' },
+];
+
+function SlashMenu({ filter, selected, onSelect, onClose }) {
+  const items = SLASH_COMMANDS.filter((c) => c.cmd.startsWith('/' + filter));
+  if (!items.length) return null;
+  return (
+    <div className="slash-menu" role="listbox" aria-label="Slash commands">
+      {items.map((item, i) => (
+        <div
+          key={item.cmd}
+          className={`slash-menu-item${i === selected ? ' slash-menu-item--active' : ''}`}
+          role="option"
+          aria-selected={i === selected}
+          onMouseDown={(e) => { e.preventDefault(); onSelect(item.cmd); }}
+        >
+          <span className="slash-cmd-label">{item.label}</span>
+          <span className="slash-cmd-desc">{item.desc}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Single Model Column ──────────────────────────────────────────────────────
+function ModelColumn({
+  thread, busy, planMode, onPick, onSend, onStop, onRetry, onExecutePlan,
+  onClear, onClone, onClose, canClose, colCount, fileContext,
+}) {
+  const [input, setInput] = useState('');
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashFilter, setSlashFilter] = useState('');
+  const [slashIdx, setSlashIdx] = useState(0);
+  const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [thread.msgs.length, busy]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  }, [input]);
+
+  function go() {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput('');
+    setSlashOpen(false);
+    onSend(thread.id, text);
+  }
+
+  const lastAssistant = [...thread.msgs].reverse().find((m) => m.role === 'assistant');
+  const est = input.trim() ? estimate(input, thread.model) : null;
+  const providerInfo = PROVIDERS.find((p) => p.id === thread.provider);
+
+  function tierBadge() {
+    if (thread.provider === 'ollama') return <span className="col-tier local">LOCAL</span>;
+    if (thread.provider === 'groq' || thread.provider === 'gemini') return <span className="col-tier free">FREE</span>;
+    if (thread.provider === 'openrouter' && String(thread.model).endsWith(':free')) return <span className="col-tier free">FREE</span>;
+    return null;
+  }
+
+  return (
+    <div className={`model-col${busy ? ' model-col--busy' : ''}`} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Column header */}
+      <div className="col-header">
+        <div className="col-header-top">
+          <ModelPicker provider={thread.provider} model={thread.model} onPick={(p, m) => onPick(thread.id, p, m)} />
+          {tierBadge()}
+          {thread.lastUsage && (
+            <span className="col-cost" title="Last call cost">
+              {thread.provider === 'ollama' || thread.provider === 'opencode' ? '⚡ free' : fmtCost(thread.lastUsage.cost)}
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          {thread.toolLog.length > 0 && (
+            <span className="col-tools" title={thread.toolLog.join('\n')}>🧰{thread.toolLog.length}</span>
+          )}
+          {canClose && (
+            <button className="col-btn col-close-btn" onClick={() => onClose(thread.id)} title="Remove this column" aria-label="Remove column">✕</button>
+          )}
+        </div>
+        <div className="col-header-sub">
+          <span className="col-thread-title">{thread.title !== 'New chat' ? thread.title : ''}</span>
+          <button className="col-btn col-btn-ghost" onClick={() => onClear(thread.id)} disabled={busy} title="Clear conversation">Clear</button>
+          {colCount < MAX_COLS && (
+            <button className="col-btn col-btn-ghost" onClick={() => onClone(thread.id)} title="Clone this column with same model">+ Clone</button>
+          )}
+          {canClose && (
+            <button className="col-btn col-btn-ghost col-btn-danger" onClick={() => onClose(thread.id)} title="Close this column">✕ Close</button>
+          )}
+          {planMode && <span className="col-plan-badge">📋 PLAN</span>}
+          {busy && <span className="col-busy-dot" aria-label="Generating">●</span>}
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="col-messages" role="log" aria-live="polite">
+        {thread.msgs.map((m, i) => (
+          <div key={i} className={`col-bubble${m.role === 'user' ? ' col-bubble--user' : ' col-bubble--ai'}`}>
+            <div className="col-bubble-role">
+              {m.role === 'user' ? 'you' : (m.via ? shortModel(m.via.split('/').slice(1).join('/') || m.via) : 'ai')}
+            </div>
+            <div className="col-bubble-content">
+              {renderBubbleContent(m.content || (busy && i === thread.msgs.length - 1 ? '…' : ''))}
+            </div>
+          </div>
+        ))}
+        {thread.toolLog.length > 0 && (
+          <div className="col-toollog">
+            {thread.toolLog.map((t, i) => <div key={i}>{t}</div>)}
+          </div>
+        )}
+        {!busy && lastAssistant?.content && lastAssistant.content !== WELCOME && (
+          <div className="col-actions">
+            <button className="col-btn col-btn-ghost" onClick={() => onRetry(thread.id)} title="Re-run last prompt">↻ Retry</button>
+            {thread.planned && (
+              <button className="col-btn col-btn-primary" onClick={() => onExecutePlan(thread.id)} title="Approve plan and execute">▶ Execute plan</button>
+            )}
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Composer */}
+      <div className="col-composer">
+        {fileContext && (
+          <div className="col-file-ctx">📎 {fileContext.path?.split(/[/\\]/).pop() || 'file'}</div>
+        )}
+        <div className="col-composer-wrap">
+          {slashOpen && (
+            <SlashMenu
+              filter={slashFilter}
+              selected={slashIdx}
+              onSelect={(cmd) => {
+                setInput(cmd + ' ');
+                setSlashOpen(false);
+                setSlashIdx(0);
+                textareaRef.current?.focus();
+              }}
+              onClose={() => setSlashOpen(false)}
+            />
+          )}
+          <div className="col-composer-row">
+            <textarea
+              ref={textareaRef}
+              className="col-input"
+              value={input}
+              rows={1}
+              onChange={(e) => {
+                const val = e.target.value;
+                setInput(val);
+                if (val.startsWith('/') && !val.includes(' ')) {
+                  setSlashFilter(val.slice(1));
+                  setSlashOpen(true);
+                  setSlashIdx(0);
+                } else {
+                  setSlashOpen(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (slashOpen) {
+                  const visible = SLASH_COMMANDS.filter((c) => c.cmd.startsWith('/' + slashFilter));
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % Math.max(1, visible.length)); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + visible.length) % Math.max(1, visible.length)); return; }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && visible.length > 0)) {
+                    e.preventDefault();
+                    const item = visible[slashIdx] || visible[0];
+                    if (item) { setInput(item.cmd + ' '); setSlashOpen(false); setSlashIdx(0); }
+                    return;
+                  }
+                  if (e.key === 'Escape') { e.preventDefault(); setSlashOpen(false); return; }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); }
+              }}
+              onBlur={() => { setTimeout(() => setSlashOpen(false), 150); }}
+              placeholder={busy ? 'Generating…' : `Ask ${shortModel(thread.model)}… (/ for commands)`}
+              disabled={busy}
+              aria-label={`Ask ${thread.model}`}
+              aria-autocomplete="list"
+              aria-expanded={slashOpen}
+            />
+            {busy
+              ? <button className="col-send col-send-stop" onClick={() => onStop(thread.id)} title="Stop">⏹</button>
+              : <button className="col-send col-send-go" onClick={go} disabled={!input.trim()} title="Send (Enter)">↑</button>
+            }
+          </div>
+        </div>
+        {est && (
+          <div className="col-estimate">
+            ≈{fmtTokens(est.tokens)}{est.cost == null ? '' : thread.provider === 'ollama' ? ' · free' : ` · ${fmtCost(est.cost)}`}
+          </div>
+        )}
+      </div>
+
+      {/* Plan mode banner */}
+      {planMode && (
+        <div className="col-plan-banner">
+          📋 Plan mode — model will plan only. Review then press ▶ Execute.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main ChatPane ────────────────────────────────────────────────────────────
+export default function ChatPane({
+  provider, model, fileContext, setFileContext, project, projectNotes,
+  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch,
+  registerThreadEditor, openThreadId, onThreadOpened,
+}) {
   const projectId = project?.id || 'default';
   const [threads, setThreads] = useState(() => [newThread(provider, model, 0)]);
-  const [activeId, setActiveId] = useState(() => threads[0].id);
-  const [selected, setSelected] = useState(() => new Set([threads[0].id]));
-  const [compare, setCompare] = useState(false);
-  const [input, setInput] = useState('');
+  // colOrder: array of thread IDs shown as columns (1-4)
+  const [colOrder, setColOrder] = useState(() => [threads[0].id]);
   const [busyIds, setBusyIds] = useState([]);
-  const [pendings, setPendings] = useState({}); // threadId -> approval state
+  const [pendings, setPendings] = useState({});
   const [skills, setSkills] = useState([]);
   const [enabledSkillIds, setEnabledSkillIds] = useState(new Set());
   const [mcpTools, setMcpTools] = useState([]);
+  // Broadcast input (shared across columns)
+  const [broadcastInput, setBroadcastInput] = useState('');
+  const [broadcastMode, setBroadcastMode] = useState(false);
+  const [bcSlashOpen, setBcSlashOpen] = useState(false);
+  const [bcSlashFilter, setBcSlashFilter] = useState('');
+  const [bcSlashIdx, setBcSlashIdx] = useState(0);
+  const [grid2x2, setGrid2x2] = useState(true);
   const saveTimer = useRef(null);
   const approvalResolve = useRef({});
   const threadCount = useRef(0);
-  const abortsRef = useRef(new Map()); // threadId -> AbortController for its in-flight run
+  const abortsRef = useRef(new Map());
 
-  // End a run: drop its controller and free the thread. Single choke point so
-  // a controller can never outlive its run (stale controllers = zombie writes).
   function endRun(tid) {
     abortsRef.current.delete(tid);
     setBusyIds((b) => b.filter((id) => id !== tid));
   }
 
-  const openThreads = threads.filter((t) => !t.archived);
-  const active = openThreads.find((t) => t.id === activeId) || openThreads[0] || threads[0];
-  const [showHistory, setShowHistory] = useState(false);
-  const [historyQ, setHistoryQ] = useState('');
-
   function patchThread(id, patch) {
-    // normalize provider on every write: labels must never persist (they break
-    // engine branching + key lookup, which key off provider ids)
     const p = patch.provider ? { provider: canonProvider(patch.provider) || patch.provider } : null;
     setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, ...patch, ...p } : t)));
   }
 
-  // load per-project threads (migrates legacy single-array history)
+  // Load saved threads
   useEffect(() => {
     (async () => {
       let saved = null;
@@ -136,18 +370,13 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       if (saved && Array.isArray(saved.threads) && saved.threads.length) {
         const fresh = (t) => {
           const base = { ...newThread(canonProvider(t.provider) || provider, t.model || model, 0), ...t, provider: canonProvider(t.provider) || provider };
-          // Dead model, or last word is one of our own error bubbles?
-          // Keep history, switch the live model to working defaults.
           const lastAssistant = [...(t.msgs || [])].reverse().find((m) => m.role === 'assistant' && m.content && m.content !== WELCOME);
           if (isDead(base.provider, base.model) || (lastAssistant && isErrorBubble(lastAssistant.content))) {
-            base.provider = provider;
-            base.model = model;
-            base.errStreak = 0;
-            base.errModel = null;
+            base.provider = provider; base.model = model; base.errStreak = 0; base.errModel = null;
           }
           return base;
         };
-        const open = saved.threads.filter((t) => !t.archived).slice(0, MAX_THREADS).map((t) => ({
+        const open = saved.threads.filter((t) => !t.archived).slice(0, MAX_COLS * 2).map((t) => ({
           ...fresh(t),
           msgs: Array.isArray(t.msgs) && t.msgs.length ? t.msgs : [{ role: 'assistant', content: WELCOME }],
           toolLog: [], scope: Array.isArray(t.scope) ? t.scope : [],
@@ -165,19 +394,19 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       }
       if (list) {
         setThreads(list);
-        setActiveId(list[0].id);
-        setSelected(new Set(list.filter((t) => !t.archived).map((t) => t.id)));
+        const openThreads = list.filter((t) => !t.archived);
+        const cols = saved?.colOrder?.filter((id) => openThreads.find((t) => t.id === id)) || [openThreads[0]?.id].filter(Boolean);
+        setColOrder(cols.length ? cols : [openThreads[0]?.id || list[0].id]);
       } else {
         const fresh = [newThread(provider, model, 0)];
         setThreads(fresh);
-        setActiveId(fresh[0].id);
-        setSelected(new Set([fresh[0].id]));
+        setColOrder([fresh[0].id]);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // load skills + enabled MCP tools for this project
+  // Load skills + MCP tools
   useEffect(() => {
     (async () => {
       if (!window.codeit) return;
@@ -193,53 +422,71 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // persist threads (debounced)
+  // Persist threads (debounced)
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const payload = { threads: threads.slice(0, MAX_THREADS + 50).map((t) => ({ id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat', titledVia: t.titledVia || null, createdAt: t.createdAt || null, updatedAt: t.updatedAt || null, archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20), editorPath: t.editorPath || null, errStreak: t.errStreak || 0, errModel: t.errModel || null })) };
+      const payload = {
+        threads: threads.slice(0, MAX_COLS + 50).map((t) => ({
+          id: t.id, provider: t.provider, model: t.model, title: t.title || 'New chat',
+          titledVia: t.titledVia || null, createdAt: t.createdAt || null, updatedAt: t.updatedAt || null,
+          archived: !!t.archived, msgs: t.msgs.slice(-100), scope: (t.scope || []).slice(0, 20),
+          editorPath: t.editorPath || null, errStreak: t.errStreak || 0, errModel: t.errModel || null,
+        })),
+        colOrder,
+      };
       if (window.codeit?.projectsSaveChat) window.codeit.projectsSaveChat(projectId, payload);
       else { try { localStorage.setItem(chatKey(projectId), JSON.stringify(payload)); } catch {} }
     }, 800);
     return () => clearTimeout(saveTimer.current);
-  }, [threads, projectId]);
+  }, [threads, colOrder, projectId]);
 
-  // thread <-> editor binding: switching threads restores that thread's file
+  // Thread <-> editor binding
   useEffect(() => {
-    onThreadSwitch?.({ id: activeId, editorPath: active?.editorPath || null });
+    const activeColId = colOrder[0];
+    if (activeColId) onThreadSwitch?.({ id: activeColId, editorPath: threads.find((t) => t.id === activeColId)?.editorPath || null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
+  }, [colOrder[0]]);
 
-  // external jump (global chat search): open + activate thread, restoring if archived
+  useEffect(() => {
+    registerThreadEditor?.((path) => {
+      const activeId = colOrder[0];
+      if (activeId) setThreads((cur) => cur.map((t) => (t.id === activeId ? { ...t, editorPath: path } : t)));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colOrder[0]]);
+
+  // External jump
   useEffect(() => {
     if (!openThreadId) return;
     const t = threads.find((x) => x.id === openThreadId);
     if (!t) return;
-    if (t.archived) restoreThread(t.id);
-    else setActiveId(t.id);
+    if (t.archived) {
+      setThreads((cur) => cur.map((x) => (x.id === openThreadId ? { ...x, archived: false } : x)));
+    }
+    if (!colOrder.includes(openThreadId)) setColOrder((c) => [openThreadId, ...c].slice(0, MAX_COLS));
     onThreadOpened?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openThreadId, threads]);
-  useEffect(() => {
-    registerThreadEditor?.((path) => {
-      setThreads((cur) => cur.map((t) => (t.id === activeId ? { ...t, editorPath: path } : t)));
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
 
-  function addThread() {
-    if (openThreads.length >= MAX_THREADS) return;
+  // ── Column management ──────────────────────────────────────────────────────
+  function addColumn() {
+    if (colOrder.length >= MAX_COLS) return;
     threadCount.current += 1;
-    const t = newThread(provider, model, threadCount.current);
+    // Try to pick a different model than what's already visible
+    const usedModels = new Set(colOrder.map((id) => {
+      const t = threads.find((x) => x.id === id);
+      return t ? `${t.provider}/${t.model}` : null;
+    }).filter(Boolean));
+    const defaultP = provider;
+    const defaultM = model;
+    const t = newThread(defaultP, defaultM, threadCount.current);
     setThreads((cur) => [...cur, t]);
-    setActiveId(t.id);
-    setSelected((s) => new Set([...s, t.id]));
+    setColOrder((c) => [...c, t.id]);
   }
 
-  // One-click Build + QA: second thread on a different model that can actually
-  // answer (verified/ready first, free-tier fallback), side-by-side compare on.
-  async function addQaThread() {
-    if (openThreads.length >= MAX_THREADS) return;
+  async function addSmartColumn() {
+    if (colOrder.length >= MAX_COLS) return;
     let alt = null;
     try {
       const keys = await getKeys();
@@ -247,62 +494,46 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       try {
         const u = await window.codeit?.usageGet?.();
         for (const e of u?.events || []) if (e.ok) verified.add(`${e.provider}/${e.model}`);
-      } catch { /* no usage yet */ }
+      } catch {}
       const g = splitReady(allModels(), keys, verified);
       const pool = [...g.working, ...g.ready, ...g.needsKey.filter((m) => m.tier === 'free')];
-      alt = pool.find((m) => !(m.provider === active.provider && m.model === active.model)) || null;
-    } catch { /* keys unavailable — fall back to current defaults */ }
+      const usedKeys = new Set(colOrder.map((id) => {
+        const t = threads.find((x) => x.id === id);
+        return t ? `${t.provider}/${t.model}` : null;
+      }).filter(Boolean));
+      alt = pool.find((m) => !usedKeys.has(`${m.provider}/${m.model}`)) || null;
+    } catch {}
     threadCount.current += 1;
-    const t = { ...newThread(alt?.provider || provider, alt?.model || model, threadCount.current), title: 'QA' };
+    const t = newThread(alt?.provider || provider, alt?.model || model, threadCount.current);
     setThreads((cur) => [...cur, t]);
-    setActiveId(t.id);
-    setSelected(new Set([active.id, t.id]));
-    setCompare(true);
+    setColOrder((c) => [...c, t.id]);
   }
 
-  function archiveThread(id) {
-    if (openThreads.length <= 1) return;
-    const now = new Date().toISOString();
-    setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, archived: true, updatedAt: now } : t)));
-    setSelected((s) => { const c = new Set(s); c.delete(id); return c; });
-    if (activeId === id) {
-      const rest = openThreads.filter((t) => t.id !== id);
-      if (rest.length) setActiveId(rest[rest.length - 1].id);
-    }
+  function cloneColumn(srcId) {
+    if (colOrder.length >= MAX_COLS) return;
+    const src = threads.find((t) => t.id === srcId);
+    if (!src) return;
+    threadCount.current += 1;
+    const t = { ...newThread(src.provider, src.model, threadCount.current) };
+    setThreads((cur) => [...cur, t]);
+    setColOrder((c) => [...c, t.id]);
   }
 
-  function restoreThread(id) {
-    // unarchive, then cap open tabs at MAX by re-archiving stalest (never the restored one)
-    setThreads((cur) => {
-      const next = cur.map((t) => (t.id === id ? { ...t, archived: false, updatedAt: new Date().toISOString() } : t));
-      const open = next.filter((t) => !t.archived).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-      if (open.length <= MAX_THREADS) return next;
-      const drop = new Set(open.slice(MAX_THREADS).map((t) => t.id));
-      drop.delete(id);
-      // if still over (all others newer — impossible since restored is newest), drop oldest anyway
-      if (open.length - drop.size > MAX_THREADS) drop.add(open[open.length - 1].id);
-      return next.map((t) => (drop.has(t.id) ? { ...t, archived: true } : t));
-    });
-    setSelected((s) => new Set([...s, id]));
-    setActiveId(id);
+  function removeColumn(id) {
+    if (colOrder.length <= 1) return;
+    // Archive instead of deleting (keeps history)
+    setThreads((cur) => cur.map((t) => (t.id === id ? { ...t, archived: true, updatedAt: new Date().toISOString() } : t)));
+    setColOrder((c) => c.filter((x) => x !== id));
+    // Abort any running stream
+    abortsRef.current.get(id)?.abort();
   }
 
-  function deleteThread(id) {
-    if (threads.filter((t) => !t.archived).length <= 1 && !threads.find((t) => t.id === id)?.archived) return;
-    setThreads((cur) => cur.filter((t) => t.id !== id));
-    setSelected((s) => { const c = new Set(s); c.delete(id); return c; });
-    if (activeId === id) {
-      const rest = openThreads.filter((t) => t.id !== id);
-      if (rest.length) setActiveId(rest[rest.length - 1].id);
-    }
+  function pickModel(threadId, p, m) {
+    patchThread(threadId, { provider: p, model: m });
   }
 
   function clearThread(id) {
     patchThread(id, { msgs: [{ role: 'assistant', content: WELCOME }], toolLog: [], planned: false, lastUsage: null });
-  }
-
-  function toggleSelect(id) {
-    setSelected((s) => { const c = new Set(s); if (c.has(id)) c.delete(id); else c.add(id); return c; });
   }
 
   function resolveApproval(threadId, decision) {
@@ -328,16 +559,11 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   async function buildCtx(text, thread) {
     const identity = thread ? `${thread.model} (via ${thread.provider} inside CodeIT)` : null;
     let pinsText = '';
-    // target thread's own pins — never the displayed thread's (broadcast used
-    // to inject whichever thread you happened to be looking at into all targets)
     const scopePaths = [...new Set([...(thread?.scope || []), ...(project?.pinned || [])])].slice(0, 8);
     if (scopePaths.length && window.codeit?.fsRead) {
       const parts = [];
       for (const p of scopePaths) {
-        try {
-          const content = await window.codeit.fsRead(p);
-          parts.push(`--- ${p} ---\n${content.slice(0, 6000)}`);
-        } catch {}
+        try { const content = await window.codeit.fsRead(p); parts.push(`--- ${p} ---\n${content.slice(0, 6000)}`); } catch {}
       }
       pinsText = parts.join('\n\n');
     }
@@ -348,8 +574,6 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   async function runThread(thread, text, sys, opts = {}) {
     const tid = thread.id;
     const planning = opts.planning ?? planMode;
-    // Own controller per run: a re-send on the same thread kills the previous
-    // run instead of two streams writing the same message slot.
     abortsRef.current.get(tid)?.abort();
     const ctrl = new AbortController();
     abortsRef.current.set(tid, ctrl);
@@ -359,45 +583,40 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     });
     setBusyIds((b) => [...b, tid]);
     patchThread(tid, { toolLog: [], planned: false });
-    // OpenCode engine: non-interactive agent run in the project dir (own tools + approvals)
+
+    // OpenCode engine
     if (canonProvider(thread.provider) === 'opencode') {
       const t0 = Date.now();
       const next = [...thread.msgs, { role: 'user', content: text }];
-      patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running in project dir…_' }] });
+      patchThread(tid, { msgs: [...next, { role: 'assistant', content: '_OpenCode agent running…_' }] });
       if (!window.codeit?.opencodeRun) {
         patchThread(tid, { msgs: [...next, { role: 'assistant', content: 'Error: OpenCode engine needs Electron (`npm run dev`).' }] });
-        endRun(tid);
-        return;
+        endRun(tid); return;
       }
       const recent = next.slice(-6).map((m) => `${m.role}: ${m.content.slice(0, 2000)}`).join('\n\n');
       const prompt = `${sys}\n\n--- PROJECT NOTES ---\n${projectNotes || '(none)'}\n\n--- RECENT ---\n${recent}`;
       const r = await window.codeit.opencodeRun(project?.path || '', thread.model, prompt);
-      if (abortsRef.current.get(tid) !== ctrl) return; // superseded by a newer run
+      if (abortsRef.current.get(tid) !== ctrl) return;
       patchThread(tid, {
         msgs: [...next, { role: 'assistant', content: r.ok ? (r.out || '(empty result)') : `OpenCode error: ${r.error || 'unknown'}`, via: `opencode/${thread.model}` }],
         toolLog: r.ok ? ['🤖 opencode agent run'] : [],
       });
       window.codeit?.usageRecord({ projectId, provider: 'opencode', model: thread.model, ms: Date.now() - t0, prompt: 0, completion: 0, ok: r.ok });
       onUsageTick?.();
-      endRun(tid);
-      return;
+      endRun(tid); return;
     }
+
     const t0 = Date.now();
     const use = { prompt: 0, completion: 0 };
     const onUsage = (u) => { use.prompt += u.prompt || 0; use.completion += u.completion || 0; };
-    // file attachment is passed explicitly by the sender — never read the
-    // global prop here (that leaked one column's file into every thread).
     const file = opts.file || null;
-    const withFile = file
-      ? `${text}\n\n--- ATTACHED FILE (${file.path}) ---\n${file.content.slice(0, 12000)}`
-      : text;
+    const withFile = file ? `${text}\n\n--- ATTACHED FILE (${file.path}) ---\n${file.content.slice(0, 12000)}` : text;
     const next = [...thread.msgs, { role: 'user', content: text }];
     const via = `${thread.provider}/${thread.model}`;
     patchThread(tid, { msgs: next });
     let acc = '';
     patchThread(tid, { msgs: [...next, { role: 'assistant', content: '', via }] });
     const push = (t) => {
-      // drop tokens from a superseded run — it no longer owns this thread
       if (abortsRef.current.get(tid) !== ctrl) return;
       acc += t;
       setThreads((cur) => cur.map((x) => {
@@ -415,7 +634,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       history[history.length - 1] = { ...history[history.length - 1], content: withFile };
       if (canUseTools) {
         if (thread.provider === 'ollama' && !ollamaToolCapable(thread.model)) {
-          push(`_Note: \`${thread.model}\` doesn't reliably emit tool calls — trying anyway. For reliable local tools switch to \`qwen3:8b\` or \`mistral:7b-instruct-v0.3-q4_0\`, or use Groq._\n\n`);
+          push(`_Note: \`${thread.model}\` may not reliably emit tool calls. For reliable local tools use \`qwen3:8b\` or \`mistral:7b-instruct-v0.3-q4_0\`._\n\n`);
         }
         await chatWithTools({
           provider: thread.provider, model: thread.model, messages: history, mcpTools,
@@ -433,60 +652,49 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         });
       } else {
         if (!planning && mcpTools.length > 0 && !PROVIDERS.find((p) => p.id === thread.provider)?.supportsTools) {
-          push(`_Note: ${thread.provider} is text-only here — MCP tools need Groq/DeepSeek/OpenRouter. Skills + notes still apply._\n\n`);
+          push(`_Note: ${thread.provider} is text-only here — MCP tools need Groq/DeepSeek/OpenRouter/Anthropic. Skills still apply._\n\n`);
         }
         await streamChat({ provider: thread.provider, model: thread.model, messages: history, onChunk: push, onUsage, signal: ctrl.signal });
       }
       if (planning) patchThread(tid, { planned: true });
     } catch (err) {
       succeeded = false;
-      // superseded: a newer run owns this thread now — write nothing
       if (abortsRef.current.get(tid) !== ctrl) return;
       const msg = String(err.message || '');
       const isNoKey = err.code === 'NO_KEY';
-      // Streak tracks the MODEL (not the thread): switching models must not
-      // inherit an old count, and a missing key is not the model failing.
       const sameModel = thread.errModel === via;
       const streak = isNoKey ? 0 : (sameModel ? (thread.errStreak || 0) + 1 : 1);
       patchThread(tid, { errStreak: streak, errModel: via });
-      const streakMsg = streak >= 2 ? `\n\n_Failed ${streak}x in a row on this model — pick another from the menu above or fix billing/keys, then resend._` : '';
+      const streakMsg = streak >= 2 ? `\n\n_Failed ${streak}× on this model — switch models or fix keys._` : '';
       if (err && err.name === 'AbortError') {
         setThreads((cur) => cur.map((x) => {
           if (x.id !== tid) return x;
-          const c = [...x.msgs];
-          c[c.length - 1] = { role: 'assistant', content: acc ? acc + '\n\n_Stopped._' : '_Stopped._', via };
+          const c = [...x.msgs]; c[c.length - 1] = { role: 'assistant', content: acc ? acc + '\n\n_Stopped._' : '_Stopped._', via };
           return { ...x, msgs: c };
         }));
         window.codeit?.usageRecord({ projectId, provider: thread.provider, model: thread.model, ms: Date.now() - t0, prompt: use.prompt, completion: use.completion, ok: false });
-        onUsageTick?.();
-        endRun(tid);
-        return;
+        onUsageTick?.(); endRun(tid); return;
       }
-      // Dead marking is status-gated: permanent ONLY for not-found responses.
-      // 401/403 mean the KEY is wrong — a body saying "does not exist" must
-      // never hide the model permanently (that's how good models vanished).
       const status = typeof err.status === 'number' ? err.status : 0;
-      const notFound = status === 404 || status === 410
-        || (status >= 400 && status < 500 && status !== 401 && status !== 403 && isDeadFailure(msg));
+      const notFound = status === 404 || status === 410 || (status >= 400 && status < 500 && status !== 401 && status !== 403 && isDeadFailure(msg));
       if (notFound) markDead(canonProvider(thread.provider), thread.model, msg);
       else if (!isNoKey && status !== 401 && status !== 403 && streak >= 2 && isTempDeadFailure(msg)) {
         markDead(canonProvider(thread.provider), thread.model, msg, TEMP_DEAD_TTL_MS);
       }
       const hint = err.code === 'NO_KEY' ? String(err.message)
-        : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model ID is retired or not enabled on your key. Open the model menu, hit ↻, and pick a current one.`
-        : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider's account, or switch the thread to Groq free tier.`
-        : /failed to fetch|networkerror|network error|load failed/i.test(msg) ? `${msg} — Tip: network problem — check your connection, VPN, or proxy, then resend.`
-        : /\b5\d\d\b/.test(msg) ? `${msg} — Tip: the provider is erroring — wait a minute and retry.`
+        : /model_not_found|does not exist|no longer available|deprecated|retired/i.test(msg) ? `${msg} — Tip: that model is retired. Open model picker and choose another.`
+        : /credit|billing|balance/i.test(msg) ? `${msg} — Tip: top up that provider, or switch to Groq free tier.`
+        : /failed to fetch|networkerror|network error|load failed/i.test(msg) ? `${msg} — Tip: check connection, VPN, or proxy.`
+        : /\b5\d\d\b/.test(msg) ? `${msg} — Tip: provider is erroring, wait a minute and retry.`
         : thread.provider === 'ollama' ? `${msg} — Tip: run \`ollama serve\` and \`ollama pull ${thread.model}\`.`
-        : `${msg} — Tip: check the key in Keys, or switch the thread to Groq free tier.`;
+        : `${msg} — Tip: check the key in Keys, or switch to Groq free tier.`;
       setThreads((cur) => cur.map((x) => {
         if (x.id !== tid) return x;
-        const c = [...x.msgs];
-        c[c.length - 1] = { role: 'assistant', content: (acc ? acc + '\n\n' + hint : hint) + streakMsg, via };
+        const c = [...x.msgs]; c[c.length - 1] = { role: 'assistant', content: (acc ? acc + '\n\n' + hint : hint) + streakMsg, via };
         return { ...x, msgs: c };
       }));
     }
-    if (abortsRef.current.get(tid) !== ctrl) return; // superseded mid-run
+    if (abortsRef.current.get(tid) !== ctrl) return;
     const cost = costUSD(thread.model, use.prompt, use.completion);
     if (succeeded) patchThread(tid, { errStreak: 0 });
     patchThread(tid, { lastUsage: { ...use, cost } });
@@ -495,88 +703,51 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     endRun(tid);
   }
 
-  async function runToolDirect(thread, spec) {
-    // /tool short.name {"json"} — explicit single tool call, no LLM round-trip
-    const tid = thread.id;
-    const m = spec.match(/^([\w-]+)\.([\w-]+)\s*(\{[\s\S]*\})?\s*$/);
-    if (!m) {
-      patchThread(tid, { msgs: [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: 'Usage: `/tool server.tool {"arg":…}` — e.g. `/tool memory.read_graph {}`. Servers: ' + mcpTools.map((t) => t.serverId.replace(/^mcp:/, '')).filter((v, i, a) => a.indexOf(v) === i).join(', '), via: `${thread.provider}/${thread.model}` }] });
-      return;
-    }
-    const [, short, name, json] = m;
-    let args = {};
-    try { args = json ? JSON.parse(json) : {}; } catch { args = {}; }
-    setBusyIds((b) => [...b, tid]);
-    const next = [...thread.msgs, { role: 'user', content: `/tool ${spec}` }, { role: 'assistant', content: `_Running ${short}.${name}…_` }];
-    patchThread(tid, { msgs: next });
-    try {
-      const out = await executeTool(tid, { serverId: `mcp:${short}`, name, args });
-      patchThread(tid, {
-        msgs: [...next.slice(0, -1), { role: 'assistant', content: `**${short}.${name}** result:\n\n\`\`\`\n${String(out).slice(0, 6000)}\n\`\`\``, via: `${thread.provider}/${thread.model}` }],
-        toolLog: [...thread.toolLog, `⚙️ mcp:${short}.${name}`],
-      });
-    } catch (err) {
-      patchThread(tid, {
-        msgs: [...next.slice(0, -1), { role: 'assistant', content: `Tool call failed: ${String(err?.message || err).slice(0, 1000)}`, via: `${thread.provider}/${thread.model}` }],
-      });
-    } finally {
-      setBusyIds((b) => b.filter((id) => id !== tid));
-    }
-  }
-
-  async function executePlan(thread) {
-    const planMsg = [...thread.msgs].reverse().find((m) => m.role === 'assistant');
-    if (!planMsg) return;
-    setPlanMode(false);
-    const sys = await buildCtx(`execute approved plan for ${project?.name || 'project'}`, thread);
-    runThread(thread, `Approved plan — execute it now, step by step:\n\n${planMsg.content.slice(0, 6000)}`, sys, { planning: false });
-  }
-
-  async function retryThread(thread) {
-    const idx = [...thread.msgs].map((m) => m.role).lastIndexOf('user');
-    if (idx < 0 || busyIds.length) return;
-    const text = thread.msgs[idx].content;
-    patchThread(thread.id, { msgs: thread.msgs.slice(0, idx), planned: false });
-    const sys = await buildCtx(text, thread);
-    runThread({ ...thread, msgs: thread.msgs.slice(0, idx) }, text, sys);
-  }
-
-  // single-thread send (per-column composers in compare view)
-  async function sendToThread(tid, text) {
-    const t = threads.find((x) => x.id === tid);
+  async function sendToThread(threadId, text) {
+    const t = threads.find((x) => x.id === threadId);
     const clean = String(text || '').trim();
-    if (!t || !clean || busyIds.includes(tid)) return;
-    // the sending composer consumes any attached file — it must not ride
-    // along into later sends from other threads
+    if (!t || !clean || busyIds.includes(threadId)) return;
+
+    // Free image generation: /image <prompt> or "generate image of ..."
+    if (clean.startsWith('/image ') || clean.toLowerCase().startsWith('generate image:')) {
+      const prompt = clean.replace(/^\/image\s+|generate image:\s*/i, '').trim();
+      if (prompt) {
+        const seed = Math.floor(Math.random() * 1000000);
+        const encoded = encodeURIComponent(prompt);
+        const imgUrl = `https://image.pollinations.ai/prompt/${encoded}?width=800&height=600&seed=${seed}&nologo=true&model=flux`;
+        const next = [
+          ...t.msgs,
+          { role: 'user', content: clean },
+          {
+            role: 'assistant',
+            content: `🎨 Generated image for: **${prompt}**\n\n![${prompt}](${imgUrl})\n\n[Open high-res ↗](${imgUrl})`,
+            via: 'free-flux/pollinations'
+          }
+        ];
+        patchThread(threadId, { msgs: next, updatedAt: new Date().toISOString() });
+        return;
+      }
+    }
+
     const file = fileContext || null;
     if (file) setFileContext?.(null);
     const sys = await buildCtx(clean, t);
     await runThread(t, clean, sys, { file });
   }
 
-  async function send() {
-    const text = input.trim();
+  async function sendBroadcast() {
+    const text = broadcastInput.trim();
     if (!text || busyIds.length) return;
-    if (text === '/plan') { setPlanMode(!planMode); setInput(''); return; }
-    const targets = selected.size ? openThreads.filter((t) => selected.has(t.id)) : [active];
+    if (text === '/plan') { setPlanMode(!planMode); setBroadcastInput(''); return; }
+    const targets = colOrder.map((id) => threads.find((t) => t.id === id)).filter(Boolean);
     if (!targets.length) return;
-    if (text.startsWith('/tool ')) {
-      setInput('');
-      await runToolDirect(active, text.slice(6).trim());
-      return;
-    }
-    // consume attached file: merge path into each target's scope for future
-    // sends, attach content to THIS send only, then clear the global prop
     const file = fileContext || null;
     if (file?.path) {
-      for (const t of targets) {
-        patchThread(t.id, { scope: [...new Set([...(t.scope || []), file.path])].slice(0, 20) });
-      }
+      for (const t of targets) patchThread(t.id, { scope: [...new Set([...(t.scope || []), file.path])].slice(0, 20) });
     }
     setFileContext?.(null);
-    setInput('');
+    setBroadcastInput('');
     for (const t of targets) {
-      // per-target system prompt so each model gets its own identity
       // eslint-disable-next-line no-await-in-loop
       const sys = await buildCtx(text, t);
       // eslint-disable-next-line no-await-in-loop
@@ -584,163 +755,196 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
     }
   }
 
+  function stopThread(tid) {
+    abortsRef.current.get(tid)?.abort();
+    const pending = approvalResolve.current[tid];
+    if (pending) resolveApproval(tid, { denied: true });
+  }
+
   function stopAll() {
-    // abort every in-flight run, release any thread parked on an approval
-    // dialog (which may be on a non-visible thread), stop the agent runner.
     for (const ctrl of abortsRef.current.values()) ctrl.abort();
-    // entries stay until each run's AbortError path calls endRun — that's
-    // what renders "_Stopped._" and clears busy without a force-clear race
     for (const tid of Object.keys(approvalResolve.current)) {
       if (approvalResolve.current[tid]) resolveApproval(tid, { denied: true });
     }
     window.codeit?.opencodeCancel(project?.path || '');
-    // runThread's AbortError path clears each thread's busy flag — no
-    // force-clear (that let a zombie stream race a fresh run's message)
   }
 
-  function threadCost(t) {
-    if (!t.lastUsage) return null;
-    if (t.provider === 'ollama' || t.provider === 'opencode') return 'FREE';
-    if (t.lastUsage.cost == null) return null;
-    return fmtCost(t.lastUsage.cost);
+  async function retryThread(threadId) {
+    const thread = threads.find((t) => t.id === threadId);
+    if (!thread) return;
+    const idx = [...thread.msgs].map((m) => m.role).lastIndexOf('user');
+    if (idx < 0 || busyIds.length) return;
+    const text = thread.msgs[idx].content;
+    patchThread(threadId, { msgs: thread.msgs.slice(0, idx), planned: false });
+    const sys = await buildCtx(text, thread);
+    runThread({ ...thread, msgs: thread.msgs.slice(0, idx) }, text, sys);
   }
 
-  // Nuclear guard: threads should never be empty, but a blank chat with dead
-  // inputs is worse than an honest error + one-click recovery.
-  if (!active) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>Chat unavailable</div>
-        <div style={{ fontSize: 13, opacity: 0.7, maxWidth: 340 }}>No chat threads exist for this project (state error).</div>
-        <button className="btn btn-primary" onClick={addThread}>Recover — new chat</button>
-      </div>
-    );
+  async function executePlan(threadId) {
+    const thread = threads.find((t) => t.id === threadId);
+    if (!thread) return;
+    const planMsg = [...thread.msgs].reverse().find((m) => m.role === 'assistant');
+    if (!planMsg) return;
+    setPlanMode(false);
+    const sys = await buildCtx(`execute approved plan for ${project?.name || 'project'}`, thread);
+    runThread(thread, `Approved plan — execute it now, step by step:\n\n${planMsg.content.slice(0, 6000)}`, sys, { planning: false });
   }
 
-  const busy = busyIds.length > 0;
-  const est = input.trim() ? estimate(input, active.model) : null;
-  const lastAssistant = [...active.msgs].reverse().find((m) => m.role === 'assistant');
+  // ── Render ─────────────────────────────────────────────────────────────────
+  const visibleThreads = colOrder.map((id) => threads.find((t) => t.id === id)).filter(Boolean);
+  const anyBusy = busyIds.length > 0;
+  const colCount = visibleThreads.length;
 
-  function enterCompare() {
-    if (compare) { setCompare(false); return; }
-    // need at least 2 visible threads: select all open ones if fewer chosen
-    if (openThreads.filter((t) => selected.has(t.id)).length < 2) {
-      setSelected(new Set(openThreads.map((t) => t.id)));
-    }
-    setCompare(true);
-  }
-
-  const compareThreads = openThreads.filter((t) => selected.has(t.id));
+  // Grid layout class
+  const gridClass = colCount === 1 ? 'arena-grid--1'
+    : colCount === 2 ? 'arena-grid--2'
+    : (colCount >= 3 && grid2x2) ? 'arena-grid--2x2'
+    : colCount === 3 ? 'arena-grid--3'
+    : 'arena-grid--4';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      <div className="threadbar" role="tablist" aria-label="Threads">
-        {openThreads.map((t, i) => (
-          <span key={t.id} className={`pill${t.id === activeId ? ' active' : ''}`}>
-            {openThreads.length > 1 && (
-              <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
-                title="Include in broadcast" aria-label={`Include thread ${i + 1} in broadcast`} />
-            )}
-            <button role="tab" aria-selected={t.id === activeId} onClick={() => setActiveId(t.id)}
-              title={`${t.title || 'New chat'} · ${t.provider}/${t.model}${t.lastUsage ? ` · last: ${fmtTokens(t.lastUsage.prompt + t.lastUsage.completion)}` : ''}${(t.scope || []).length ? ` · 📎${t.scope.length}` : ''}`}>
-              {i + 1}·{shortModel(t.model)}{busyIds.includes(t.id) ? '…' : ''}{(t.scope || []).length ? ` 📎${t.scope.length}` : ''}
+    <div className="arena">
+      {/* Arena toolbar */}
+      <div className="arena-bar">
+        <div className="arena-bar-left">
+          <span className="arena-label">
+            {colCount === 1 ? '1 Model' : `${colCount} Models`}
+          </span>
+          {colCount < MAX_COLS && (
+            <>
+              <button className="btn btn-sm btn-ghost" onClick={addColumn} title="Add a new model column">
+                + Add Model
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={addSmartColumn} title="Add a column with a different working model auto-selected">
+                + Smart Pick
+              </button>
+            </>
+          )}
+        </div>
+        <div className="arena-bar-center" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {colCount >= 3 && (
+            <button
+              className={`btn btn-sm${grid2x2 ? ' btn-primary' : ' btn-ghost'}`}
+              onClick={() => setGrid2x2(!grid2x2)}
+              title={grid2x2 ? 'Switch to side-by-side vertical columns' : 'Switch to 2x2 grid view'}
+            >
+              {grid2x2 ? '⊞ 2×2 Grid' : '|||| Columns'}
             </button>
-            {openThreads.length > 1 && <button onClick={() => archiveThread(t.id)} title="Archive thread (kept in History)" aria-label={`Archive thread ${i + 1}`}>×</button>}
-          </span>
-        ))}
-        {openThreads.length < MAX_THREADS && <button className="btn btn-sm btn-ghost" onClick={addThread} title="New chat thread (own model)">+</button>}
-        {openThreads.length < MAX_THREADS && (
-          <button className="btn btn-sm btn-ghost" onClick={addQaThread}
-            title="Build + QA: add a second thread on a different working model and open side-by-side compare">+ QA</button>
-        )}
-        {openThreads.length > 1 && (
-          <button className="btn btn-sm btn-ghost" onClick={enterCompare} title="Side-by-side view of the selected threads" aria-pressed={compare}>
-            {compare ? 'Single' : 'Compare'}
+          )}
+          {colCount > 1 && (
+            <button
+              className={`btn btn-sm${broadcastMode ? ' btn-primary' : ' btn-ghost'}`}
+              onClick={() => setBroadcastMode(!broadcastMode)}
+              title="Broadcast: send the same prompt to all visible models at once"
+              aria-pressed={broadcastMode}
+            >
+              {broadcastMode ? '📡 Broadcasting' : '📡 Broadcast'}
+            </button>
+          )}
+        </div>
+        <div className="arena-bar-right">
+          <button
+            className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`}
+            onClick={() => setPlanMode(!planMode)}
+            title="Plan mode: model plans first, you approve, then executes"
+            aria-pressed={planMode}
+          >
+            {planMode ? '📋 Planning' : '📋 Plan'}
           </button>
-        )}
-        <span className="spacer" />
-        <button className="btn btn-sm btn-ghost" onClick={() => setShowHistory(!showHistory)} title="Chat history for this project" aria-pressed={showHistory}>History</button>
-        <button className="btn btn-sm btn-ghost" onClick={() => clearThread(activeId)} disabled={busy} title="Clear this thread">Clear</button>
+          {anyBusy && (
+            <button className="btn btn-sm btn-danger" onClick={stopAll} title="Stop all running models">
+              ⏹ Stop All
+            </button>
+          )}
+        </div>
       </div>
-      {showHistory && (
-        <div style={{ borderBottom: '1px solid #30363d', padding: 8, display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '45%', overflowY: 'auto' }}>
-          <input value={historyQ} onChange={(e) => setHistoryQ(e.target.value)} placeholder="Search chats…" style={{ fontSize: 12 }} />
-          {threads
-            .filter((t) => !historyQ.trim() || `${t.title || ''} ${t.model} ${t.provider}`.toLowerCase().includes(historyQ.trim().toLowerCase()))
-            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-            .map((t) => (
-              <div key={t.id} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: t.archived ? 0.6 : 1 }}
-                  title={`${t.titledVia || `${t.provider}/${t.model}`} · ${(t.msgs || []).length} msgs`}>
-                  {t.archived ? '📦 ' : '💬 '}{t.title || 'New chat'} <span style={{ opacity: 0.6 }}>· {t.titledVia || `${t.provider}/${shortModel(t.model)}`}</span>
-                </span>
-                {!t.archived
-                  ? <button className="btn btn-sm btn-ghost" onClick={() => { setActiveId(t.id); setShowHistory(false); }}>Open</button>
-                  : <button className="btn btn-sm btn-ghost" onClick={() => restoreThread(t.id)}>Restore</button>}
-                <button className="btn btn-sm btn-ghost" onClick={() => deleteThread(t.id)} title="Delete forever">✕</button>
-              </div>
-            ))}
+
+      {/* Broadcast bar */}
+      {broadcastMode && colCount > 1 && (
+        <div className="broadcast-bar">
+          <span className="broadcast-label">📡 Send to all {colCount} models:</span>
+          <div className="col-composer-wrap" style={{ flex: 1 }}>
+            {bcSlashOpen && (
+              <SlashMenu
+                filter={bcSlashFilter}
+                selected={bcSlashIdx}
+                onSelect={(cmd) => {
+                  setBroadcastInput(cmd + ' ');
+                  setBcSlashOpen(false);
+                  setBcSlashIdx(0);
+                }}
+                onClose={() => setBcSlashOpen(false)}
+              />
+            )}
+            <textarea
+              className="broadcast-input"
+              rows={1}
+              value={broadcastInput}
+              onChange={(e) => {
+                const val = e.target.value;
+                setBroadcastInput(val);
+                if (val.startsWith('/') && !val.includes(' ')) {
+                  setBcSlashFilter(val.slice(1));
+                  setBcSlashOpen(true);
+                  setBcSlashIdx(0);
+                } else {
+                  setBcSlashOpen(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (bcSlashOpen) {
+                  const visible = SLASH_COMMANDS.filter((c) => c.cmd.startsWith('/' + bcSlashFilter));
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setBcSlashIdx((i) => (i + 1) % Math.max(1, visible.length)); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setBcSlashIdx((i) => (i - 1 + visible.length) % Math.max(1, visible.length)); return; }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && visible.length > 0)) {
+                    e.preventDefault();
+                    const item = visible[bcSlashIdx] || visible[0];
+                    if (item) { setBroadcastInput(item.cmd + ' '); setBcSlashOpen(false); setBcSlashIdx(0); }
+                    return;
+                  }
+                  if (e.key === 'Escape') { e.preventDefault(); setBcSlashOpen(false); return; }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBroadcast(); }
+              }}
+              onBlur={() => { setTimeout(() => setBcSlashOpen(false), 150); }}
+              placeholder={`Ask all ${colCount} models… (/ for commands, Enter to send)`}
+              disabled={anyBusy}
+            />
+          </div>
+          {anyBusy
+            ? <button className="btn btn-danger btn-sm" onClick={stopAll}>⏹ Stop</button>
+            : <button className="btn btn-primary btn-sm" onClick={sendBroadcast} disabled={!broadcastInput.trim()}>
+                Send to {colCount}
+              </button>
+          }
         </div>
       )}
-      <div className="thread-meta">
-        <ModelPicker provider={active.provider} model={active.model}
-          onPick={(provider, model) => patchThread(activeId, { provider, model })} />
-        <button className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setPlanMode(!planMode)}
-          title="Plan mode: model plans, you approve, then it executes" aria-pressed={planMode}>Plan</button>
-        <span>{project ? `Project: ${project.name}` : 'No project'}</span>
-        {mcpTools.length > 0 && <span>🧰{mcpTools.length}</span>}
-        {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
+
+      {/* Model columns */}
+      <div className={`arena-grid ${gridClass}`}>
+        {visibleThreads.map((thread) => (
+          <ModelColumn
+            key={thread.id}
+            thread={thread}
+            busy={busyIds.includes(thread.id)}
+            planMode={planMode}
+            onPick={pickModel}
+            onSend={sendToThread}
+            onStop={stopThread}
+            onRetry={retryThread}
+            onExecutePlan={executePlan}
+            onClear={clearThread}
+            onClone={cloneColumn}
+            onClose={removeColumn}
+            canClose={colCount > 1}
+            colCount={colCount}
+            fileContext={fileContext}
+          />
+        ))}
       </div>
-      <div className="messages" role="log" aria-live="polite" aria-label="Chat messages" style={compare && compareThreads.length > 1 ? { flexDirection: 'row', gap: 8 } : undefined}>
-        {compare && compareThreads.length > 1 ? (
-          compareThreads.map((t) => (
-            <CompareCol key={t.id} thread={t} busy={busyIds.includes(t.id)}
-              cost={threadCost(t)} onSend={(text) => sendToThread(t.id, text)} />
-          ))
-        ) : (
-          active.msgs.map((m, i) => (
-            <div key={i} className={`bubble ${m.role === 'user' ? 'user' : 'assistant'}`}>
-              <div className="role">{m.role === 'assistant' ? (m.via || 'assistant') : m.role}</div>
-              {m.content || (busyIds.includes(activeId) && i === active.msgs.length - 1 ? '…' : '')}
-            </div>
-          ))
-        )}
-        {!compare && active.toolLog.length > 0 && (
-          <div className="toollog">
-            {active.toolLog.map((t, i) => <div key={i}>{t}</div>)}
-          </div>
-        )}
-        {!compare && !busy && lastAssistant && lastAssistant.content && lastAssistant.content !== WELCOME && (
-          <div className="row">
-            <button className="btn btn-sm btn-ghost" onClick={() => retryThread(active)} title="Re-run last prompt">↻ Retry</button>
-            {active.planned && <button className="btn btn-sm btn-primary" onClick={() => executePlan(active)} title="Approve plan and execute">▶ Execute plan</button>}
-          </div>
-        )}
-      </div>
-      {planMode && (
-        <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d', fontSize: 12, background: '#1f6feb22' }}>
-          📋 <strong>PLAN MODE</strong> — the model will plan only, no tools, no edits. Review the plan, then press <strong>▶ Execute plan</strong> (or toggle Plan off to chat normally).
-        </div>
-      )}
-      <div className="composer">
-        <label className="sr-only" htmlFor="codeit-chat">Chat message</label>
-        <textarea id="codeit-chat" rows={1} value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder={selected.size > 1 ? `Ask ${selected.size} threads… (/tool, /plan)` : `Ask ${active.model}… (/tool, /plan)`}
-          title="Enter sends · Shift+Enter newline · /tool runs a tool directly · /plan toggles plan mode"
-          disabled={busy} />
-        {est && (
-          <span className="estimate" title="Pre-send estimate">
-            ≈{fmtTokens(est.tokens)}{est.cost == null ? '' : active.provider === 'ollama' || active.provider === 'opencode' ? ' · FREE' : ` · ${fmtCost(est.cost)}`}
-          </span>
-        )}
-        {busy
-          ? <button className="btn btn-danger" onClick={stopAll} title="Stop all running threads">⏹ Stop</button>
-          : <button className="btn btn-primary" onClick={send}>{planMode ? 'Plan' : 'Send'}</button>}
-      </div>
+
+      {/* Tool approval overlay */}
       {(() => {
-        // approval may belong to ANY thread (compare/broadcast targets) —
-        // hiding it behind the active tab stranded the promise forever
         const entry = Object.entries(pendings)[0];
         return entry ? <ToolApproval pending={entry[1]} onResolve={(d) => resolveApproval(entry[0], d)} /> : null;
       })()}

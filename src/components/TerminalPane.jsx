@@ -23,7 +23,7 @@ export default function TerminalPane({ cwd }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="term" role="log" aria-live="polite" aria-label="Terminal output">
-        {cwd ? <div className="dim">cwd: {cwd}</div> : <Empty>Terminal needs Electron (`npm run dev`).</Empty>}
+        <div className="dim">cwd: {cwd || '(default workspace)'}</div>
         {log.map((l, i) => <div key={i}>{l}</div>)}
       </div>
       <div className="composer">

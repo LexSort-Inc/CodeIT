@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('codeit', {
   // projects — organized multi-project workflow (local folders + GitHub repos)
   projectsList: () => ipcRenderer.invoke('projects:list'),
   projectsAddLocal: () => ipcRenderer.invoke('projects:add-local'),
+  projectsCreateNew: (opts) => ipcRenderer.invoke('projects:create-new', opts),
+  projectsPickParentDir: () => ipcRenderer.invoke('projects:pick-parent-dir'),
   projectsActivate: (id) => ipcRenderer.invoke('projects:activate', id),
   projectsRemove: (id) => ipcRenderer.invoke('projects:remove', id),
   projectsRename: (id, name) => ipcRenderer.invoke('projects:rename', id, name),

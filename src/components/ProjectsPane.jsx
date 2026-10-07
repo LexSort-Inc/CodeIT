@@ -8,6 +8,11 @@ export default function ProjectsPane({ activeId, onSelect, refreshKey }) {
   const [data, setData] = useState({ activeId: null, projects: [] });
   const [q, setQ] = useState('');
   const [showClone, setShowClone] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectTemplate, setNewProjectTemplate] = useState('webapp');
+  const [newParentDir, setNewParentDir] = useState('');
+  const [createErr, setCreateErr] = useState('');
   const [repos, setRepos] = useState([]);
   const [reposErr, setReposErr] = useState('');
   const [repoInput, setRepoInput] = useState('');
@@ -33,10 +38,37 @@ export default function ProjectsPane({ activeId, onSelect, refreshKey }) {
   }
   async function openCloner() {
     setShowClone(true);
+    setShowCreate(false);
     setReposErr('');
     const r = await window.codeit.githubRepos(50);
     if (r.ok) setRepos(r.repos);
     else setReposErr(r.error || 'gh not authed — you can still paste OWNER/REPO below.');
+  }
+
+  async function createProject(e) {
+    e?.preventDefault();
+    if (!newProjectName.trim() || busy) return;
+    setBusy(true);
+    setCreateErr('');
+    const r = await window.codeit.projectsCreateNew({
+      name: newProjectName.trim(),
+      parentDir: newParentDir || undefined,
+      template: newProjectTemplate,
+    });
+    setBusy(false);
+    if (r?.ok) {
+      setShowCreate(false);
+      setNewProjectName('');
+      await refresh();
+      onSelect(r.project.id);
+    } else {
+      setCreateErr(r?.error || 'Failed to create project');
+    }
+  }
+
+  async function pickParent() {
+    const p = await window.codeit.projectsPickParentDir();
+    if (p) setNewParentDir(p);
   }
 
   const filtered = data.projects.filter((p) =>
@@ -51,11 +83,52 @@ export default function ProjectsPane({ activeId, onSelect, refreshKey }) {
       <div className="pad stack">
         <label className="sr-only" htmlFor="codeit-project-search">Search projects</label>
         <input id="codeit-project-search" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search projects…" />
-        <div className="row">
-          <button className="btn btn-sm" onClick={addLocal} title="Add a local folder as a project" style={{ flex: 1 }}>+ Folder</button>
+        <div className="row" style={{ gap: 4 }}>
+          <button className="btn btn-sm btn-primary" onClick={() => { setShowCreate(!showCreate); setShowClone(false); }} title="Create a brand new project & folder" style={{ flex: 1.1 }}>+ New</button>
+          <button className="btn btn-sm" onClick={addLocal} title="Open an existing local folder as a project" style={{ flex: 1 }}>+ Folder</button>
           <button className="btn btn-sm" onClick={openCloner} title="Clone a GitHub repo as a project" style={{ flex: 1 }}>+ GitHub</button>
         </div>
       </div>
+
+      {showCreate && (
+        <form onSubmit={createProject} className="pad stack" style={{ background: 'var(--bg2)', borderBottom: '1px solid var(--line)', margin: '0 8px 8px', borderRadius: 'var(--r-sm)' }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent)' }}>✨ Create New Project</div>
+          {createErr && <div style={{ fontSize: 11, color: 'var(--red)' }}>{createErr}</div>}
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--dim)', display: 'block', marginBottom: 2 }}>Project Name</label>
+            <input
+              type="text"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="e.g. my-new-app"
+              autoFocus
+              required
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--dim)', display: 'block', marginBottom: 2 }}>Starter Template</label>
+            <select
+              value={newProjectTemplate}
+              onChange={(e) => setNewProjectTemplate(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            >
+              <option value="webapp">Web App (HTML/CSS starter)</option>
+              <option value="blank">Blank Project</option>
+            </select>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--dim)' }}>
+            Location: {newParentDir ? newParentDir.slice(-28) : '~/CodeIT-Projects'}{' '}
+            <button type="button" className="btn btn-sm btn-ghost" onClick={pickParent} style={{ fontSize: 10, padding: '1px 4px' }}>Change…</button>
+          </div>
+          <div className="row" style={{ marginTop: 4 }}>
+            <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !newProjectName.trim()} style={{ flex: 1 }}>
+              {busy ? 'Creating…' : 'Create & Open'}
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setShowCreate(false)}>Cancel</button>
+          </div>
+        </form>
+      )}
       <div className="pane-body scroll pad" style={{ gap: 4 }} role="listbox" aria-label="Projects">
         {!window.codeit && <Empty>Projects need Electron (`npm run dev`).</Empty>}
         {filtered.map((p) => (

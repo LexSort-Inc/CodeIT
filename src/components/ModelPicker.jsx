@@ -157,9 +157,23 @@ export default function ModelPicker({ provider, model, onPick }) {
   const flat = listed;
   const sel = flat[idx] ?? null; // never fall back to a different list (fact panel showed the wrong model)
   return (
-    <div style={{ position: 'relative' }} ref={wrapRef}>
-      <button className="btn btn-sm" onClick={toggle} title={`${provider}/${model} — pick model for this thread`} aria-haspopup="listbox" aria-expanded={open}>
-        {provider === 'opencode' ? '🤖 ' : ''}{String(model).length > 24 ? String(model).slice(0, 23) + '…' : model} ▾
+    <div style={{ position: 'relative', minWidth: 0, flexShrink: 1, maxWidth: '100%' }} ref={wrapRef}>
+      <button
+        className="btn btn-sm"
+        onClick={toggle}
+        title={`${provider}/${model} — pick model for this thread`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          maxWidth: '100%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          display: 'inline-block',
+          verticalAlign: 'middle',
+        }}
+      >
+        {provider === 'opencode' ? '🤖 ' : ''}{String(model).length > 20 ? String(model).slice(0, 19) + '…' : model} ▾
       </button>
       {open && anchor && createPortal(
         <div ref={menuRef} role="listbox" aria-label="Pick model" style={menuPos()}>

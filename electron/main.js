@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu, MenuItem, session } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs/promises');
@@ -100,6 +100,22 @@ function deriveName(p) {
 }
 
 async function createWindow() {
+  // Configure persist:webdock session so ChatGPT, Claude, and Gemini can load without X-Frame-Options or CSP blockers
+  const webdockSession = session.fromPartition('persist:webdock');
+  webdockSession.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+  );
+  webdockSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = { ...details.responseHeaders };
+    for (const key of Object.keys(responseHeaders)) {
+      const lower = key.toLowerCase();
+      if (lower === 'x-frame-options' || lower === 'content-security-policy') {
+        delete responseHeaders[key];
+      }
+    }
+    callback({ responseHeaders });
+  });
+
   mainWindow = new BrowserWindow({
     width: 1560,
     height: 950,
@@ -124,6 +140,64 @@ async function createWindow() {
     const safe = safeExternalUrl(url);
     if (safe) shell.openExternal(safe);
     return { action: 'deny' };
+  });
+
+  // Native right-click context menu (Cut, Copy, Paste, Select All)
+  mainWindow.webContents.on('context-menu', (_e, params) => {
+    const menu = new Menu();
+
+    // Image actions
+    if (params.mediaType === 'image' && params.srcURL) {
+      menu.append(new MenuItem({
+        label: 'Copy Image Address',
+        click: () => {
+          const { clipboard } = require('electron');
+          clipboard.writeText(params.srcURL);
+        }
+      }));
+      menu.append(new MenuItem({
+        label: 'Save Image As…',
+        click: () => {
+          mainWindow.webContents.downloadURL(params.srcURL);
+        }
+      }));
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
+
+    if (params.linkURL) {
+      menu.append(new MenuItem({
+        label: 'Open Link in Browser',
+        click: () => {
+          const safe = safeExternalUrl(params.linkURL);
+          if (safe) shell.openExternal(safe);
+        }
+      }));
+      menu.append(new MenuItem({
+        label: 'Copy Link Address',
+        click: () => {
+          const { clipboard } = require('electron');
+          clipboard.writeText(params.linkURL);
+        }
+      }));
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
+
+    if (params.editFlags.canCut) {
+      menu.append(new MenuItem({ label: 'Cut', role: 'cut' }));
+    }
+    if (params.editFlags.canCopy) {
+      menu.append(new MenuItem({ label: 'Copy', role: 'copy' }));
+    }
+    if (params.editFlags.canPaste) {
+      menu.append(new MenuItem({ label: 'Paste', role: 'paste' }));
+    }
+    if (params.editFlags.canSelectAll) {
+      menu.append(new MenuItem({ label: 'Select All', role: 'selectAll' }));
+    }
+
+    if (menu.items.length > 0) {
+      menu.popup();
+    }
   });
 
   // restore last active project as workspace root
@@ -328,6 +402,72 @@ ipcMain.handle('projects:add-local', async () => {
   workspaceRoot = dir;
   await saveProjects(data);
   return { data, project };
+});
+
+ipcMain.handle('projects:create-new', async (_e, { name, parentDir, template } = {}) => {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return { ok: false, error: 'Project name is required' };
+  const safeFolder = trimmed.replace(/[<>:"/\\|?*]/g, '-').replace(/\s+/g, '-');
+
+  let base = parentDir;
+  if (!base || !fsSync.existsSync(base)) {
+    base = path.join(os.homedir(), 'CodeIT-Projects');
+  }
+  try {
+    await fs.mkdir(base, { recursive: true });
+  } catch (err) {
+    return { ok: false, error: `Cannot create directory: ${err.message}` };
+  }
+
+  const targetDir = path.join(base, safeFolder);
+  if (fsSync.existsSync(targetDir)) {
+    return { ok: false, error: `Folder "${safeFolder}" already exists in ${base}` };
+  }
+
+  try {
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.mkdir(path.join(targetDir, '.codeit'), { recursive: true });
+
+    // Initial project context
+    const ctx = `# ${trimmed}\n\nCreated in CodeIT on ${new Date().toLocaleDateString()}.\n\n## Stack & Goals\n- What this app does:\n- Main technologies:\n`;
+    await fs.writeFile(path.join(targetDir, '.codeit', 'CONTEXT.md'), ctx, 'utf8');
+
+    // Initial README
+    const readme = `# ${trimmed}\n\nBuilt with [CodeIT](https://github.com/LexSort-Inc/CodeIT).\n\n## Getting Started\nUse the integrated CodeIT terminal to install packages and start your dev server.\n`;
+    await fs.writeFile(path.join(targetDir, 'README.md'), readme, 'utf8');
+
+    if (template === 'webapp') {
+      const html = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>${trimmed}</title>\n  <style>\n    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }\n    .box { text-align: center; padding: 2rem 3rem; background: #1e293b; border-radius: 12px; border: 1px solid #334155; }\n    h1 { margin: 0 0 10px; color: #38bdf8; }\n  </style>\n</head>\n<body>\n  <div class="box">\n    <h1>${trimmed}</h1>\n    <p>Built with CodeIT — ready for your code!</p>\n  </div>\n</body>\n</html>\n`;
+      await fs.writeFile(path.join(targetDir, 'index.html'), html, 'utf8');
+    }
+
+    const data = await loadProjects();
+    const project = {
+      id: newId(),
+      name: trimmed,
+      kind: 'local',
+      path: targetDir,
+      repo: null,
+      url: null,
+      pinned: [],
+      createdAt: new Date().toISOString(),
+      lastOpened: new Date().toISOString()
+    };
+    data.projects.unshift(project);
+    data.activeId = project.id;
+    workspaceRoot = targetDir;
+    await saveProjects(data);
+
+    return { ok: true, data, project, root: workspaceRoot };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('projects:pick-parent-dir', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
+  if (res.canceled || !res.filePaths[0]) return null;
+  return res.filePaths[0];
 });
 
 ipcMain.handle('projects:activate', async (_e, id) => {

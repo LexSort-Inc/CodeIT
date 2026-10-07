@@ -19,11 +19,11 @@ export function providerLabel(p) {
 
 export const PROVIDERS = [
   { id: 'ollama', label: 'Ollama (local)', supportsTools: true, contextK: 16, models: ['qwen2.5-coder:7b', 'qwen2.5-coder:14b', 'llama3.2:3b', 'qwen3:8b', 'mistral:7b-instruct-v0.3-q4_0'] },
-  { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-3.8-flash', 'gemini-3.5-flash'] },
-  { id: 'groq', label: 'Groq (free tier)', supportsTools: true, contextK: 128, models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'] },
+  { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro'] },
+  { id: 'groq', label: 'Groq (free tier)', supportsTools: true, contextK: 128, models: ['openai/gpt-oss-20b', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama3-8b-8192'] },
   { id: 'deepseek', label: 'DeepSeek', supportsTools: true, contextK: 64, models: ['deepseek-chat', 'deepseek-coder'] },
-  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-2-9b-it:free'] },
-  { id: 'anthropic', label: 'Claude (Anthropic)', supportsTools: false, contextK: 200, models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'] },
+  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-2-9b-it:free', 'mistralai/mistral-7b-instruct:free'] },
+  { id: 'anthropic', label: 'Claude (Anthropic)', supportsTools: true, contextK: 200, models: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-5'] },
   { id: 'opencode', label: 'OpenCode (agent)', supportsTools: true, contextK: 128, models: ['default'] }
 ];
 
@@ -266,6 +266,13 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
     e.code = 'NO_KEY';
     throw e;
   }
+
+  // Anthropic native tool calling
+  if (provider === 'anthropic') {
+    await chatWithToolsAnthropic({ model, key, messages, mcpTools, onChunk, onToolCall, onToolEvent, onUsage, signal });
+    return;
+  }
+
   const tools = toOpenAiTools(mcpTools || []);
   const convo = [...messages];
   const use = (u) => onUsage?.(u);
@@ -298,6 +305,79 @@ export async function chatWithTools({ provider, model, messages, mcpTools, onChu
   // rounds exhausted — stream final summary
   convo.push({ role: 'user', content: 'Summarize the tool results above concisely.' });
   await streamFinal({ provider, model, key, convo, onChunk, onUsage: use, signal });
+}
+
+// Anthropic tool calling: uses the Anthropic native format (not OpenAI-compat).
+async function chatWithToolsAnthropic({ model, key, messages, mcpTools, onChunk, onToolCall, onToolEvent, onUsage, signal }) {
+  const sys = messages.find((m) => m.role === 'system');
+  const turns = messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content }));
+  const tools = (mcpTools || []).map((t) => ({
+    name: `${t.serverId.replace(/^mcp:/, '')}__${t.name}`,
+    description: (t.description || t.name).slice(0, 500),
+    input_schema: t.inputSchema || { type: 'object', properties: {} },
+  }));
+  const convo = [...turns];
+  for (let round = 0; round < 3; round++) {
+    const body = { model, max_tokens: 4096, messages: convo, stream: false };
+    if (sys?.content) body.system = sys.content;
+    if (tools.length) body.tools = tools;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await httpErr('anthropic', res, 'request failed');
+    const data = await res.json();
+    if (data.usage) onUsage?.({ prompt: data.usage.input_tokens || 0, completion: data.usage.output_tokens || 0 });
+    const toolBlocks = (data.content || []).filter((b) => b.type === 'tool_use');
+    const textBlocks = (data.content || []).filter((b) => b.type === 'text');
+    if (!toolBlocks.length) {
+      // No tool calls — stream a final pass for nice streaming UX
+      const finalText = textBlocks.map((b) => b.text || '').join('');
+      if (finalText) onChunk(finalText);
+      return;
+    }
+    // Push assistant turn with all content blocks
+    convo.push({ role: 'assistant', content: data.content });
+    const toolResults = [];
+    for (const tb of toolBlocks) {
+      const [serverShort, ...rest] = (tb.name || '__').split('__');
+      const serverId = `mcp:${serverShort}`;
+      onToolEvent?.({ status: 'calling', serverId, name: rest.join('__'), args: tb.input });
+      let result = '';
+      let failed = false;
+      try {
+        result = await onToolCall({ serverId, name: rest.join('__'), args: tb.input || {} });
+      } catch (err) {
+        result = `Tool error: ${String(err && err.message || err).slice(0, 1000)}`;
+        failed = true;
+      }
+      onToolEvent?.({ status: failed ? 'error' : 'done', serverId, name: rest.join('__') });
+      toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: String(result).slice(0, 8000) });
+    }
+    convo.push({ role: 'user', content: toolResults });
+  }
+  // rounds exhausted — stream final summary
+  const finalRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 4096, system: sys?.content, messages: [...convo, { role: 'user', content: 'Summarize the tool results above concisely.' }], stream: true }),
+  });
+  if (!finalRes.ok) throw await httpErr('anthropic', finalRes, 'request failed');
+  let pin = 0; let pout = 0;
+  for await (const line of sseLines(finalRes)) {
+    const t = line.trim();
+    if (!t.startsWith('data:')) continue;
+    const json = sseJson(t.slice(5));
+    if (!json) continue;
+    const fe = frameErr('anthropic', json);
+    if (fe) throw fe;
+    const tok = json?.delta?.text || '';
+    if (tok) onChunk(tok);
+    if (json?.message?.usage) pin += json.message.usage.input_tokens || 0;
+    if (json?.usage) pout += json.usage.output_tokens || 0;
+  }
+  if (pin || pout) onUsage?.({ prompt: pin, completion: pout });
 }
 
 // One non-streaming round: returns {msg, calls:[{id,name,args}], usage:{prompt,completion}}.

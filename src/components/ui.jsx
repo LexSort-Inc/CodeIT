@@ -7,8 +7,20 @@ export function Tabs({ tabs, active, onChange, labels }) {
   return (
     <div className="tabs" role="tablist">
       {tabs.map((t) => (
-        <button key={t} role="tab" aria-selected={active === t} className={active === t ? 'active' : ''}
-          onClick={() => onChange(t)}>{labels ? labels[t] : t}</button>
+        <button
+          key={t}
+          type="button"
+          role="tab"
+          aria-selected={active === t}
+          className={active === t ? 'active' : ''}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onChange(t);
+          }}
+        >
+          {labels ? labels[t] : t}
+        </button>
       ))}
     </div>
   );
