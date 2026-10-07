@@ -1,23 +1,22 @@
 // Per-1M-token prices in USD, checked Oct 2026. Estimates — providers change these.
 // Key: exact model id. Local engines cost $0 (own hardware).
 const PRICES = {
-  // Groq (free tier keys still meter at list price for display)
+  // Groq list prices (free tier keys still meter at list price for display)
   'openai/gpt-oss-20b': { in: 0.075, out: 0.3 },
   'openai/gpt-oss-120b': { in: 0.15, out: 0.6 },
-  'llama-3.1-8b-instant': { in: 0.05, out: 0.08 },
-  // DeepSeek
+  // DeepSeek (direct)
   'deepseek-chat': { in: 0.27, out: 1.1 },
-  'deepseek-coder': { in: 0.27, out: 1.1 },
   // Google
+  'gemini-2.5-flash': { in: 0.3, out: 2.5 },
   'gemini-2.0-flash': { in: 0.1, out: 0.4 },
-  'gemini-1.5-flash': { in: 0.075, out: 0.3 },
-  // Anthropic
-  'claude-sonnet-4-6': { in: 3, out: 15 },
-  'claude-opus-4-6': { in: 15, out: 75 },
+  // Anthropic (Oct 2026 lineup; Haiku alias claude-haiku-4-5 resolves to -20251001)
+  'claude-sonnet-5-5': { in: 2, out: 10 },
+  'claude-opus-5-5': { in: 4, out: 20 },
   'claude-haiku-4-5': { in: 1, out: 5 },
-  // OpenRouter free models
-  'meta-llama/llama-3.3-70b-instruct:free': { in: 0, out: 0 },
-  'google/gemma-2-9b-it:free': { in: 0, out: 0 },
+  // OpenRouter free models (all $0; roster turns over monthly — see openrouter.ai/models)
+  'openrouter/free': { in: 0, out: 0 },
+  'cohere/north-mini-code:free': { in: 0, out: 0 },
+  'google/gemma-4-26b-a4b-it:free': { in: 0, out: 0 },
 };
 
 export function costUSD(model, promptTokens, completionTokens) {

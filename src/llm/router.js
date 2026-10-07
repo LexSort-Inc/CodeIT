@@ -19,11 +19,14 @@ export function providerLabel(p) {
 
 export const PROVIDERS = [
   { id: 'ollama', label: 'Ollama (local)', supportsTools: true, contextK: 16, models: ['qwen2.5-coder:7b', 'qwen2.5-coder:14b', 'llama3.2:3b', 'qwen3:8b', 'mistral:7b-instruct-v0.3-q4_0'] },
-  { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-3.8-flash', 'gemini-3.5-flash'] },
-  { id: 'groq', label: 'Groq (free tier)', supportsTools: true, contextK: 128, models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'] },
-  { id: 'deepseek', label: 'DeepSeek', supportsTools: true, contextK: 64, models: ['deepseek-chat', 'deepseek-coder'] },
-  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-2-9b-it:free'] },
-  { id: 'anthropic', label: 'Claude (Anthropic)', supportsTools: false, contextK: 200, models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'] },
+  // Model IDs verified Oct 2026 against provider docs + live OpenRouter /models.
+  // Groq shut down llama-3.3-70b-versatile + llama-3.1-8b-instant on 2026-08-16 (use gpt-oss/qwen3.6).
+  // openrouter/free is the meta-router and never goes stale; pinned :free IDs die monthly.
+  { id: 'gemini', label: 'Gemini (free tier)', supportsTools: false, contextK: 1000, models: ['gemini-2.5-flash', 'gemini-2.0-flash'] },
+  { id: 'groq', label: 'Groq (free tier)', supportsTools: true, contextK: 128, models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'] },
+  { id: 'deepseek', label: 'DeepSeek', supportsTools: true, contextK: 64, models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { id: 'openrouter', label: 'OpenRouter (free models)', supportsTools: true, contextK: 128, models: ['openrouter/free', 'cohere/north-mini-code:free', 'google/gemma-4-26b-a4b-it:free'] },
+  { id: 'anthropic', label: 'Claude (Anthropic)', supportsTools: false, contextK: 200, models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5'] },
   { id: 'opencode', label: 'OpenCode (agent)', supportsTools: true, contextK: 128, models: ['default'] }
 ];
 
