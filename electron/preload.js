@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('codeit', {
   fsList: () => ipcRenderer.invoke('fs:list'),
   fsRead: (p) => ipcRenderer.invoke('fs:read', p),
   fsWrite: (p, c) => ipcRenderer.invoke('fs:write', p, c),
+  imagesSave: (projectPath, name, b64) => ipcRenderer.invoke('images:save', projectPath, name, b64),
   execRun: (cmd) => ipcRenderer.invoke('exec:run', cmd),
   tasksStart: (cmd) => ipcRenderer.invoke('tasks:start', cmd),
   tasksList: () => ipcRenderer.invoke('tasks:list'),
