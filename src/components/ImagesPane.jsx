@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Empty } from './ui.jsx';
 
 // Local image generation via the CodeIT SDXL quality server (Mac: Pony V6 XL, MPS fp16).
@@ -19,6 +19,8 @@ export default function ImagesPane({ project }) {
   const [steps, setSteps] = useState(28);
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0); // seconds since generate started
+  const timer = useRef(null);
   const [gallery, setGallery] = useState([]); // [{src, seed, ms, prompt}]
   const [err, setErr] = useState('');
 
@@ -41,6 +43,10 @@ export default function ImagesPane({ project }) {
     if (!prompt.trim() || busy) return;
     setBusy(true);
     setErr('');
+    const t0 = Date.now();
+    setElapsed(0);
+    clearInterval(timer.current);
+    timer.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500);
     try {
       const r = await fetch(`${HOST}/generate`, {
         method: 'POST',
@@ -53,15 +59,27 @@ export default function ImagesPane({ project }) {
     } catch (e) {
       setErr(String(e.message || e).slice(0, 300));
     }
+    clearInterval(timer.current);
     setBusy(false);
   }
 
-  async function saveToProject(item) {
-    if (!window.codeit?.imagesSave || !project) return;
+  useEffect(() => () => clearInterval(timer.current), []);
+
+  function fmtElapsed(s) {
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function stage(s) {
+    if (s < 12) return 'warming up the model…';
+    if (s < 45) return `denoising… (${steps} steps on MPS)`;
+    return 'refining details — almost there…';
+  }
+
+  async function saveImage(item) {
+    if (!window.codeit?.imagesSave) return;
     const name = `img_${new Date().toISOString().replace(/[:.]/g, '-')}_s${item.seed}.png`;
-    const r = await window.codeit.imagesSave(project.path, name, item.b64);
+    const r = await window.codeit.imagesSave(project ? project.path : null, name, item.b64);
     if (!r.ok) setErr(`save failed: ${r.error}`);
-    else setErr(`saved: .codeit/images/${name}`);
+    else setErr(`saved: ${r.path}`);
   }
 
   return (
@@ -99,8 +117,16 @@ export default function ImagesPane({ project }) {
             <input type="number" value={seed} onChange={(e) => setSeed(+e.target.value || 0)} placeholder="-1 random" style={{ width: 90, marginLeft: 4 }} />
           </label>
           <span className="spacer" />
-          <button className="btn btn-primary" onClick={generate} disabled={busy || !ready}>{busy ? 'Rendering…' : 'Generate'}</button>
+          <button className="btn btn-primary" onClick={generate} disabled={busy || !ready}>{busy ? `Rendering… ${fmtElapsed(elapsed)}` : 'Generate'}</button>
         </div>
+        {busy && (
+          <div role="status" aria-live="polite" style={{ padding: '2px 0' }}>
+            <div className="pbar"><div className="pbar-fill" /></div>
+            <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 4 }}>
+              {stage(elapsed)} · {fmtElapsed(elapsed)} elapsed · typical 1024² takes 1–3 min on MPS
+            </div>
+          </div>
+        )}
       </div>
       <div className="pane-body scroll pad stack">
         {gallery.length === 0 && <Empty>Nothing yet — renders appear here. A 1024² image takes ~1–3 min on MPS.</Empty>}
@@ -110,7 +136,9 @@ export default function ImagesPane({ project }) {
             <div className="sub" style={{ whiteSpace: 'normal', marginTop: 4 }}>{g.prompt}</div>
             <div className="row" style={{ marginTop: 4 }}>
               <span style={{ fontSize: 11, color: 'var(--dim)', flex: 1 }}>seed {g.seed} · {(g.ms / 1000).toFixed(1)}s</span>
-              {project && <button className="btn btn-sm" onClick={() => saveToProject(g)}>Save to project</button>}
+              <button className="btn btn-sm" onClick={() => saveImage(g)} title={project ? 'Save into <project>/.codeit/images/' : 'No project selected — saves into Downloads/CodeIT-images/'}>
+                {project ? 'Save to project' : 'Save to Downloads'}
+              </button>
             </div>
           </div>
         ))}

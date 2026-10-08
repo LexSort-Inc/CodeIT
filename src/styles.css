@@ -160,6 +160,9 @@ textarea { font-family: var(--font); }
 .statusbar .cost { color: var(--text); }
 
 /* ---------- misc ---------- */
+.pbar { height: 6px; border-radius: 3px; background: var(--bg2); border: 1px solid var(--line); overflow: hidden; }
+.pbar-fill { height: 100%; width: 30%; border-radius: 3px; background: var(--accent); animation: pbar-slide 1.2s ease-in-out infinite; }
+@keyframes pbar-slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
 .empty { padding: 12px; font-size: 12px; color: var(--dim); }
 .row { display: flex; gap: 6px; align-items: center; }
 .stack { display: flex; flex-direction: column; gap: 6px; }

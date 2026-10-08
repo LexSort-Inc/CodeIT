@@ -140,14 +140,17 @@ ipcMain.handle('fs:write', async (_e, filePath, content) => {
   return true;
 });
 
-// ---------- IPC: generated images (base64 PNG -> <project>/.codeit/images/) ----------
+// ---------- IPC: generated images (base64 PNG -> <project>/.codeit/images/, else ~/Downloads/CodeIT-images/) ----------
 ipcMain.handle('images:save', async (_e, projectPath, name, b64) => {
   try {
     const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'img.png';
-    const dir = path.join(String(projectPath || workspaceRoot), '.codeit', 'images');
+    const dir = projectPath
+      ? path.join(String(projectPath), '.codeit', 'images')
+      : path.join(os.homedir(), 'Downloads', 'CodeIT-images');
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, safe), Buffer.from(String(b64 || ''), 'base64'));
-    return { ok: true, path: path.join(dir, safe) };
+    const full = path.join(dir, safe);
+    await fs.writeFile(full, Buffer.from(String(b64 || ''), 'base64'));
+    return { ok: true, path: full };
   } catch (err) {
     return { ok: false, error: String(err.message || err).slice(0, 300) };
   }
