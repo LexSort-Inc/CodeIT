@@ -71,20 +71,23 @@ async function startImgServer(key) {
       proc.on('close', () => { s.running = false; s.proc = null; });
       proc.on('error', () => { s.running = false; s.proc = null; });
 
-      // Wait for port to become ready
+      // Wait for port to become ready (poll up to ~60s)
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; resolve(v); } };
       const timeout = setTimeout(() => {
         if (!s.running) {
           try { proc.kill(); } catch {}
-          resolve({ ok: false, error: `Server ${key} failed to start (timeout)` });
+          done({ ok: false, error: `Server ${key} failed to start (timeout)` });
         }
-      }, 30000);
+      }, 60000);
 
       const check = async () => {
+        if (settled) return;
         if (await checkPort(s.port)) {
           s.running = true;
           clearTimeout(timeout);
-          resolve({ ok: true, port: s.port });
-        } else if (s.running !== false) {
+          done({ ok: true, port: s.port });
+        } else {
           setTimeout(check, 1000);
         }
       };
@@ -348,6 +351,9 @@ process.on('uncaughtException', (err) => {
 ipcMain.handle('imgservers:status', async () => getImgServerStatus());
 ipcMain.handle('imgservers:start', async (_e, key) => startImgServer(key));
 ipcMain.handle('imgservers:stop', async (_e, key) => stopImgServer(key));
+
+// ---------- IPC: single workspace fs (now follows active project) ----------
+ipcMain.handle('workspace:open', async () => {
   const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (!res.canceled && res.filePaths[0]) workspaceRoot = res.filePaths[0];
   return workspaceRoot;
@@ -1025,9 +1031,10 @@ ipcMain.handle('tools:server-tools', async (_e, serverId) => {
 });
 
 app.on('before-quit', () => {
-  // No orphaned children: MCP servers, background tasks, opencode runs.
+  // No orphaned children: MCP servers, background tasks, opencode runs, image servers.
   mcp.stopAll();
   for (const t of TASKS.values()) if (t.running) killTree(t.proc);
   for (const c of opencodeProcs.values()) killTree(c);
   opencodeProcs.clear();
+  for (const s of Object.values(IMG_SERVERS)) if (s.proc) killTree(s.proc);
 });
