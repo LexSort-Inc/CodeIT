@@ -37,7 +37,9 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 .muted { color: var(--dim); font-size: 13px; }
 .spacer { flex: 1; }
 .grid-projects { flex: 1; display: grid; grid-template-columns: 240px minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
-.grid-projects.files-closed { grid-template-columns: 240px minmax(0, 1.6fr) 0 minmax(0, 1.6fr); }
+.grid-projects.files-closed { grid-template-columns: 240px minmax(0, 1.6fr) minmax(0, 1.6fr); }
+/* NOTE: files-pane is display:none when closed, so grid auto-placement puts the
+   side pane in track 3 — it must NOT be a 0-width track or all tab content clips. */
 .grid-projects.files-closed .pane.files-pane { display: none; }
 .explorer-block, .editor-block { display: contents; }
 .pane.files-pane.hide-explorer .explorer-block, .pane.files-pane.hide-editor .editor-block { display: none; }
