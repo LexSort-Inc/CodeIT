@@ -118,7 +118,7 @@ input[type="password"], input[type="search"] {
 textarea { font-family: var(--font); }
 
 /* ── Tabs ───────────────────────────────────────────────────────────── */
-.tabs { display: flex; gap: 4px; padding: 5px; align-items: center; }
+.tabs { display: flex; gap: 4px; padding: 5px; align-items: center; flex-wrap: wrap; overflow-x: auto; }
 .tabs .btn, .tabs button {
   background: transparent; border: 1px solid transparent;
   color: var(--dim); border-radius: 20px; padding: 3px 10px;
@@ -577,6 +577,25 @@ textarea { font-family: var(--font); }
 .uncensored { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .uncensored-err { font-size: 12px; color: var(--red); padding: 6px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .uncensored .toolbar select { max-width: 340px; }
+
+/* ── Image generation (Pony V6 XL) ────────────────────────────────────── */
+.imagegen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.imagegen .toolbar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--bg0); flex-shrink: 0; }
+.img-card { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.img-card img { display: block; width: 100%; height: auto; }
+.img-meta, .img-prompt { padding: 0 8px; }
+.col-composer-wrap { display: flex; flex-direction: column; gap: 8px; }
+.col-composer-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.col-input {
+  background: var(--bg0); color: var(--text); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 5px 8px; font-size: 13px; font-family: var(--font);
+  min-width: 0;
+}
+.col-input:focus { outline: none; border-color: var(--accent); }
+.col-send { padding: 6px 12px; }
+.col-send-stop { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+.col-send-go { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.col-estimate { font-size: 11px; color: var(--dim); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }

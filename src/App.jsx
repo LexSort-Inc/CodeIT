@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ChatPane from './components/ChatPane.jsx';
 import UncensoredPane from './components/UncensoredPane.jsx';
+import ImageGenPane from './components/ImageGenPane.jsx';
 import FileExplorer from './components/FileExplorer.jsx';
 import TerminalPane from './components/TerminalPane.jsx';
 import WebviewDock from './components/WebviewDock.jsx';
@@ -41,7 +42,7 @@ export default function App() {
   const [explorerOpen, setExplorerOpen] = useState(() => uiGet('explorer', false)); // file folder view, closed by default
   const [editorOpen, setEditorOpen] = useState(() => uiGet('editor', false)); // editor, closed by default
   const [onboard, setOnboard] = useState(() => !uiGet('onboarded', false));
-  const [chatMode, setChatMode] = useState(() => uiGet('chatMode', 'work')); // work (Arena) | uncensored
+  const [chatMode, setChatMode] = useState(() => uiGet('chatMode', 'work')); // work (Arena) | uncensored | images
   const filesPaneClosed = !explorerOpen && !editorOpen;
   const [toolCount, setToolCount] = useState(0);
   const [zen, setZen] = useState(false);
@@ -251,8 +252,8 @@ export default function App() {
         </section>
         <section className="pane" aria-label={chatMode === 'work' ? 'Chat' : 'Uncensored chat'}>
           <div className="pane-title tabs">
-            <Tabs tabs={['work', 'uncensored']} active={chatMode} onChange={setChatMode}
-              labels={{ work: 'Arena', uncensored: 'Uncensored' }} />
+            <Tabs tabs={['work', 'uncensored', 'images']} active={chatMode} onChange={setChatMode}
+              labels={{ work: 'Arena', uncensored: 'Uncensored', images: 'Images' }} />
             {chatMode === 'work' && fileContext && <span className="muted">📎 {fileContext.path.split(/[/\\]/).pop()}</span>}
           </div>
           <div className="pane-body">
@@ -265,6 +266,9 @@ export default function App() {
             </div>
             <div className="chatpane-host" style={chatMode === 'uncensored' ? undefined : { display: 'none' }}>
               <UncensoredPane />
+            </div>
+            <div className="chatpane-host" style={chatMode === 'images' ? undefined : { display: 'none' }}>
+              <ImageGenPane />
             </div>
           </div>
         </section>
@@ -312,6 +316,7 @@ export default function App() {
           actions={[
             { id: 'setup', label: 'Open setup guide (add keys, verify)', run: () => setOnboard(true) },
             { id: 'uncensored', label: chatMode === 'uncensored' ? 'Back to Arena' : 'Open uncensored chat (local, private)', run: () => setChatMode(chatMode === 'uncensored' ? 'work' : 'uncensored') },
+            { id: 'images', label: chatMode === 'images' ? 'Back to Arena' : 'Open image generation (Pony V6 XL, local)', run: () => setChatMode(chatMode === 'images' ? 'work' : 'images') },
             { id: 'zen', label: `${zen ? 'Exit' : 'Enter'} zen mode`, hint: '⌘K Z', run: () => setZen(!zen) },
             { id: 'search-chats', label: 'Search all chats…', run: () => setSearchOpen(true) },
             { id: 'files', label: `${explorerOpen ? 'Hide' : 'Show'} file folder view`, run: () => setExplorerOpen(!explorerOpen) },

@@ -44,5 +44,9 @@ contextBridge.exposeInMainWorld('codeit', {
   resetData: () => ipcRenderer.invoke('app:reset-data'),
   usageRecord: (ev) => ipcRenderer.invoke('usage:record', ev),
   usageGet: () => ipcRenderer.invoke('usage:get'),
-  usageReset: () => ipcRenderer.invoke('usage:reset')
+  usageReset: () => ipcRenderer.invoke('usage:reset'),
+  // image generation servers (Pony V6 XL, sd-turbo)
+  imgserversStatus: () => ipcRenderer.invoke('imgservers:status'),
+  imgserversStart: (key) => ipcRenderer.invoke('imgservers:start', key),
+  imgserversStop: (key) => ipcRenderer.invoke('imgservers:stop', key)
 });

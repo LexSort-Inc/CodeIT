@@ -12,6 +12,122 @@ const isDev = !app.isPackaged;
 let mainWindow;
 let workspaceRoot = os.homedir();
 
+// Image generation servers
+const IMG_SERVERS = {
+  pony: {
+    name: 'Pony Diffusion V6 XL',
+    port: 8003,
+    cwd: path.join(os.homedir(), 'ImageGen', 'fastsd'),
+    cmd: [path.join('env', 'Scripts', 'python.exe'), '-m', 'uvicorn', 'server_sdxl_ov:app', '--port', '8003', '--host', '127.0.0.1'],
+    proc: null,
+    running: false,
+  },
+  turbo: {
+    name: 'sd-turbo (fast preview)',
+    port: 8001,
+    cwd: path.join(os.homedir(), 'ImageGen', 'onnx'),
+    cmd: [path.join('env', 'Scripts', 'python.exe'), '-m', 'uvicorn', 'server_a:app', '--port', '8001', '--host', '127.0.0.1'],
+    proc: null,
+    running: false,
+  },
+};
+
+async function checkPort(port) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const sock = new net.Socket();
+    sock.setTimeout(500);
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    sock.on('error', () => resolve(false));
+    sock.connect(port, '127.0.0.1');
+  });
+}
+
+async function startImgServer(key) {
+  const s = IMG_SERVERS[key];
+  if (!s) return { ok: false, error: `Unknown server ${key}` };
+  if (s.running && s.proc) return { ok: true, already: true };
+
+  // Check if already running on port
+  if (await checkPort(s.port)) {
+    s.running = true;
+    return { ok: true, port: s.port };
+  }
+
+  // Resolve python path
+  const python = path.join(s.cwd, s.cmd[0]);
+  if (!fsSync.existsSync(python)) {
+    return { ok: false, error: `Python not found at ${python}` };
+  }
+  const args = s.cmd.slice(1);
+
+  return new Promise((resolve) => {
+    try {
+      const proc = execFile(python, args, { cwd: s.cwd, windowsHide: true });
+      s.proc = proc;
+      proc.stdout?.on('data', () => {});
+      proc.stderr?.on('data', () => {});
+      proc.on('close', () => { s.running = false; s.proc = null; });
+      proc.on('error', () => { s.running = false; s.proc = null; });
+
+      // Wait for port to become ready
+      const timeout = setTimeout(() => {
+        if (!s.running) {
+          try { proc.kill(); } catch {}
+          resolve({ ok: false, error: `Server ${key} failed to start (timeout)` });
+        }
+      }, 30000);
+
+      const check = async () => {
+        if (await checkPort(s.port)) {
+          s.running = true;
+          clearTimeout(timeout);
+          resolve({ ok: true, port: s.port });
+        } else if (s.running !== false) {
+          setTimeout(check, 1000);
+        }
+      };
+      check();
+    } catch (err) {
+      s.running = false;
+      s.proc = null;
+      resolve({ ok: false, error: String(err) });
+    }
+  });
+}
+
+async function stopImgServer(key) {
+  const s = IMG_SERVERS[key];
+  if (!s) return { ok: false, error: `Unknown server ${key}` };
+  if (s.proc) {
+    try {
+      if (process.platform === 'win32') {
+        execFile('taskkill', ['/PID', String(s.proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
+      } else s.proc.kill('SIGTERM');
+    } catch {}
+    s.proc = null;
+  }
+  s.running = false;
+  return { ok: true };
+}
+
+async function getImgServerStatus() {
+  const out = {};
+  for (const [key, s] of Object.entries(IMG_SERVERS)) {
+    const portUp = await checkPort(s.port);
+    out[key] = { name: s.name, port: s.port, running: portUp };
+  }
+  return out;
+}
+
+// Auto-start servers on app ready
+async function autoStartImgServers() {
+  for (const key of Object.keys(IMG_SERVERS)) {
+    await startImgServer(key).catch(() => {});
+  }
+}
+
 // Defense in depth: only our own frame may call IPC. Webview guests never get
 // this preload, and a navigated/compromised main frame must not reach us either.
 {
@@ -208,7 +324,10 @@ async function createWindow() {
   } catch { /* first run */ }
 }
 
-app.whenReady().then(createWindow).catch((err) => {
+app.whenReady().then(async () => {
+  await createWindow();
+  await autoStartImgServers();
+}).catch((err) => {
   try { dialog.showErrorBox('CodeIT failed to start', String((err && err.stack) || err).slice(0, 2000)); } catch { /* headless */ }
   app.quit();
 });
@@ -226,7 +345,9 @@ process.on('uncaughtException', (err) => {
 });
 
 // ---------- IPC: single workspace fs (now follows active project) ----------
-ipcMain.handle('workspace:open', async () => {
+ipcMain.handle('imgservers:status', async () => getImgServerStatus());
+ipcMain.handle('imgservers:start', async (_e, key) => startImgServer(key));
+ipcMain.handle('imgservers:stop', async (_e, key) => stopImgServer(key));
   const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (!res.canceled && res.filePaths[0]) workspaceRoot = res.filePaths[0];
   return workspaceRoot;
