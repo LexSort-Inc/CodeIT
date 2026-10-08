@@ -15,6 +15,8 @@ export default function ImageGenPane() {
   const [images, setImages] = useState([]);
   const [servers, setServers] = useState({ pony: { running: false }, turbo: { running: false } });
   const [starting, setStarting] = useState({});
+  const [prog, setProg] = useState({ step: 0, total: 0, running: false });
+  const [elapsed, setElapsed] = useState(0);
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -54,8 +56,24 @@ export default function ImageGenPane() {
     }
     setErr('');
     setBusy(true);
+    setProg({ step: 0, total: Number(steps), running: true });
+    setElapsed(0);
+    const t0 = Date.now();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const elapsedId = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
+    const progId = setInterval(async () => {
+      try {
+        const pc = new AbortController();
+        const to = setTimeout(() => pc.abort(), 5000);
+        const pr = await fetch(`${API_BASE}/progress`, { signal: pc.signal });
+        clearTimeout(to);
+        if (pr.ok) {
+          const pj = await pr.json();
+          setProg({ step: pj.step || 0, total: pj.total || Number(steps), running: !!pj.running });
+        }
+      } catch { /* server busy serializing — elapsed timer keeps ticking */ }
+    }, 2000);
     try {
       const res = await fetch(`${API_BASE}/generate`, {
         method: 'POST',
@@ -84,6 +102,8 @@ export default function ImageGenPane() {
       if (e.name === 'AbortError') return;
       setErr(String(e.message || e));
     } finally {
+      clearInterval(elapsedId);
+      clearInterval(progId);
       setBusy(false);
       abortRef.current = null;
     }
@@ -137,9 +157,22 @@ export default function ImageGenPane() {
           </div>
         )}
         {busy && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--dim)', padding: 40 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--dim)', padding: 40, gap: 10 }}>
             <div style={{ fontSize: 32 }}>⏳</div>
-            <div style={{ marginTop: 8 }}>Generating…</div>
+            <div style={{ width: 280, height: 8, borderRadius: 4, background: 'var(--bg3)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: prog.total > 0 ? `${Math.min(100, Math.round((prog.step / prog.total) * 100))}%` : '100%',
+                background: 'var(--accent)',
+                opacity: prog.total > 0 ? 1 : 0.5,
+                transition: 'width 1s',
+              }} />
+            </div>
+            <div style={{ fontSize: 12 }}>
+              {prog.total > 0 && prog.step > 0
+                ? `Step ${prog.step} / ${prog.total} · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`
+                : `Warming up… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`}
+            </div>
           </div>
         )}
       </div>
