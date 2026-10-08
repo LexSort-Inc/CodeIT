@@ -11,6 +11,103 @@ const isDev = !app.isPackaged;
 let mainWindow;
 let workspaceRoot = os.homedir();
 
+// ---------- Image quality server (Windows auto-start; Mac uses launchd) ----------
+// Operational copy: ~/ImageGen/fastsd/server_sdxl_win.py — copied from
+// servers/sdxl/server_sdxl_win.py in this repo (re-copy after editing; the
+// packaged app cannot run scripts from inside app.asar).
+// Contract: servers/sdxl/README.md (GET /info, POST /generate on :8002).
+const IMG_SERVERS = {
+  pony: {
+    name: 'Pony Diffusion V6 XL',
+    port: 8002,
+    cwd: path.join(os.homedir(), 'ImageGen', 'fastsd'),
+    script: 'server_sdxl_win.py',
+    modelDir: path.join(os.homedir(), 'ImageGen', 'Models', 'sdxl-ov'),
+    proc: null,
+    running: false,
+  },
+};
+
+function checkImgPort(port) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const sock = new net.Socket();
+    sock.setTimeout(500);
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    sock.on('error', () => resolve(false));
+    sock.connect(port, '127.0.0.1');
+  });
+}
+
+function killImgProc(proc) {
+  if (!proc) return;
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    } else proc.kill('SIGTERM');
+  } catch { /* already gone */ }
+}
+
+async function startImgServer(key) {
+  const s = IMG_SERVERS[key];
+  if (!s) return { ok: false, error: `Unknown server ${key}` };
+  if (s.running && s.proc) return { ok: true, already: true };
+  if (await checkImgPort(s.port)) {
+    s.running = true;
+    return { ok: true, port: s.port };
+  }
+  const python = path.join(s.cwd, 'env', 'Scripts', 'python.exe');
+  const script = path.join(s.cwd, s.script);
+  if (!fsSync.existsSync(python)) return { ok: false, error: `Python not found at ${python}` };
+  if (!fsSync.existsSync(script)) return { ok: false, error: `Server script not found at ${script}` };
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let proc = null;
+    try {
+      proc = execFile(python, ['-u', script], {
+        cwd: s.cwd,
+        windowsHide: true,
+        env: { ...process.env, PORT: String(s.port), MODEL_DIR: s.modelDir },
+      });
+      s.proc = proc;
+      proc.on('close', () => { s.running = false; s.proc = null; });
+      proc.on('error', () => { s.running = false; s.proc = null; });
+      const timeout = setTimeout(() => {
+        if (!s.running) { killImgProc(proc); done({ ok: false, error: `Server ${key} failed to start (timeout)` }); }
+      }, 90000);
+      const check = async () => {
+        if (settled) return;
+        if (await checkImgPort(s.port)) {
+          s.running = true;
+          clearTimeout(timeout);
+          done({ ok: true, port: s.port });
+        } else setTimeout(check, 1000);
+      };
+      check();
+    } catch (err) {
+      s.running = false;
+      s.proc = null;
+      done({ ok: false, error: String(err) });
+    }
+  });
+}
+
+async function getImgServerStatus() {
+  const out = {};
+  for (const [key, s] of Object.entries(IMG_SERVERS)) {
+    out[key] = { name: s.name, port: s.port, running: await checkImgPort(s.port) };
+  }
+  return out;
+}
+
+async function autoStartImgServers() {
+  for (const key of Object.keys(IMG_SERVERS)) {
+    await startImgServer(key).catch(() => {});
+  }
+}
+
 // ---------- Projects store (organized multi-project workflow) ----------
 // projects.json in userData: { activeId, projects: [{id,name,kind,path,repo,url,branch,pinned,createdAt,lastOpened}] }
 // Per-project chat history: userData/chats/<id>.json
@@ -89,7 +186,13 @@ async function createWindow() {
   } catch { /* first run */ }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await createWindow();
+  await autoStartImgServers();
+}).catch((err) => {
+  try { dialog.showErrorBox('CodeIT failed to start', String((err && err.stack) || err).slice(0, 2000)); } catch { /* headless */ }
+  app.quit();
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -676,4 +779,10 @@ ipcMain.handle('tools:server-tools', async (_e, serverId) => {
   }
 });
 
-app.on('before-quit', () => mcp.stopAll());
+ipcMain.handle('imgservers:status', async () => getImgServerStatus());
+ipcMain.handle('imgservers:start', async (_e, key) => startImgServer(key));
+
+app.on('before-quit', () => {
+  mcp.stopAll();
+  for (const s of Object.values(IMG_SERVERS)) if (s.proc) killImgProc(s.proc);
+});

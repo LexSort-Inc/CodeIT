@@ -5,8 +5,8 @@ contract on every machine. No keys, your hardware.
 
 | Machine | Server | Backend |
 |---|---|---|
-| Mac (this one) | `server_sdxl_mac.py` → `http://127.0.0.1:8002` | Pony Diffusion V6 XL, MPS fp16 |
-| ThinkCenter | Windows variant (same API, port 8002) | DirectML/CPU |
+| Mac | `server_sdxl_mac.py` → `http://127.0.0.1:8002` | Pony Diffusion V6 XL, MPS fp16 |
+| ThinkCenter (Windows) | `server_sdxl_win.py` → `http://127.0.0.1:8002` | Pony Diffusion V6 XL, OpenVINO fp16 CPU |
 
 ## Mac setup (one time)
 
@@ -26,6 +26,27 @@ MODEL_DIR=~/PonyServer/Models/pony-v6-xl PORT=8002 ./.venv/bin/python \
 
 Then open CodeIT → right pane → **Images**. A 1024² render takes ~1–3 min on
 16GB MPS. `Save to project` drops PNGs into `<project>/.codeit/images/`.
+
+## Windows setup (one time, ThinkCenter)
+
+Prereqs (already on the ThinkCenter; one-time notes for a fresh box):
+`ImageGen\Models\sdxl-ov` holds the Pony V6 XL OpenVINO fp16 export (~8GB),
+`ImageGen\fastsd\env` the Python env (`torch`, `optimum-intel`, `openvino`,
+`fastapi`, `uvicorn`, `pillow`). Model source: `stablediffusionapi/Pony-Diffusion-V6-XL`.
+
+## Run (Windows)
+
+CodeIT auto-starts this server on launch (Electron `imgservers`, port 8002).
+Manual equivalent:
+
+```powershell
+$env:MODEL_DIR = "$env:USERPROFILE\ImageGen\Models\sdxl-ov"
+$env:PORT = "8002"
+& "$env:USERPROFILE\ImageGen\fastsd\env\Scripts\python.exe" servers\sdxl\server_sdxl_win.py
+```
+
+Then open CodeIT → right pane → **Images**. A 1024² render takes ~6 min
+(8 steps) to ~17 min (28 steps) on the Ryzen 7 PRO 5750GE CPU.
 
 ## Keep-alive (launchd, Mac)
 
