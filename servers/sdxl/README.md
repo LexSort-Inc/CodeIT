@@ -27,6 +27,17 @@ MODEL_DIR=~/PonyServer/Models/pony-v6-xl PORT=8002 ./.venv/bin/python \
 Then open CodeIT → right pane → **Images**. A 1024² render takes ~1–3 min on
 16GB MPS. `Save to project` drops PNGs into `<project>/.codeit/images/`.
 
+## Keep-alive (launchd, Mac)
+
+The server runs as a LaunchAgent so it survives shells and restarts itself:
+
+- Plist: `~/Library/LaunchAgents/com.codeit.sdxl-mac.plist`
+- Runs: `~/PonyServer/server_sdxl_mac.py` (**local SSD copy** of this repo file —
+  launching Python with its script on the external vault stalls at startup
+  when the drive sleeps; re-copy after editing: `cp servers/sdxl/server_sdxl_mac.py ~/PonyServer/`)
+- Logs: `~/PonyServer/server.log`
+- `launchctl load/unload ~/Library/LaunchAgents/com.codeit.sdxl-mac.plist`
+
 ## API
 
 - `GET /info` → `{ model, backend, device, dtype, ready, error }`

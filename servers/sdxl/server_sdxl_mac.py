@@ -47,7 +47,8 @@ def load_pipe():
         return
     try:
         device = "mps" if torch.backends.mps.is_available() else "cpu"
-        kwargs = {"torch_dtype": torch.float16, "use_safetensors": True}
+        # fp16 safetensors on disk are named *.fp16.safetensors -> variant="fp16".
+        kwargs = {"torch_dtype": torch.float16, "use_safetensors": True, "variant": "fp16"}
         # Prefer diffusers folder layout; fall back to single checkpoint file.
         if os.path.isdir(os.path.join(MODEL_DIR, "unet")) or os.path.isfile(
             os.path.join(MODEL_DIR, "model_index.json")
