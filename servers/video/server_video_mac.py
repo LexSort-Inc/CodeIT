@@ -13,6 +13,7 @@ CodeIT app talks to http://127.0.0.1:8003 directly (CORS open for localhost).
 """
 
 import base64
+import glob
 import io
 import os
 import time
@@ -26,6 +27,7 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from diffusers import LTXPipeline
+from transformers import T5EncoderModel
 
 MODEL_DIR = os.path.expanduser(os.getenv("MODEL_DIR", "~/PonyServer/Models/ltx-video"))
 PORT = int(os.getenv("PORT", "8003"))
@@ -49,7 +51,16 @@ def load_pipe():
         return
     try:
         device = "mps" if torch.backends.mps.is_available() else "cpu"
-        pipe = LTXPipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.float16)
+        # Single-file 2B checkpoint (repo has no diffusers folder layout for 2B).
+        ckpt = os.path.join(MODEL_DIR, "ltx-video-2b-v0.9.5.safetensors")
+        if not os.path.isfile(ckpt):
+            alt = sorted(glob.glob(os.path.join(MODEL_DIR, "*2b*.safetensors")))
+            if not alt:
+                raise RuntimeError(f"no LTX 2B checkpoint in {MODEL_DIR}")
+            ckpt = alt[0]
+        pipe = LTXPipeline.from_single_file(ckpt, torch_dtype=torch.float16,
+            text_encoder=T5EncoderModel.from_pretrained(MODEL_DIR, subfolder="text_encoder",
+                                                        torch_dtype=torch.float16))
         pipe = pipe.to(device)
         try:
             pipe.enable_attention_slicing()
@@ -69,7 +80,7 @@ class GenReq(BaseModel):
     frames: int = 49
     fps: int = 24
     steps: int = 30
-    guidance: float = 3.0
+    guidance: float = 1.0  # 0.9-distilled model has guidance baked in; 1.0 verified best
     seed: int = -1
 
 

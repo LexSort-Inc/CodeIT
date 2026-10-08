@@ -21,7 +21,7 @@ export default function VideosPane({ project }) {
   const [prompt, setPrompt] = useState('');
   const [length, setLength] = useState(LENGTHS[1]);
   const [size, setSize] = useState(SIZES[0]);
-  const [steps, setSteps] = useState(30);
+  const [steps, setSteps] = useState(25);
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
