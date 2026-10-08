@@ -156,6 +156,23 @@ ipcMain.handle('images:save', async (_e, projectPath, name, b64) => {
   }
 });
 
+// ---------- IPC: generated videos (base64 MP4 -> <project>/.codeit/videos/, else ~/Downloads/CodeIT-videos/) ----------
+// Sibling of images:save; image path untouched.
+ipcMain.handle('videos:save', async (_e, projectPath, name, b64) => {
+  try {
+    const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'clip.mp4';
+    const dir = projectPath
+      ? path.join(String(projectPath), '.codeit', 'videos')
+      : path.join(os.homedir(), 'Downloads', 'CodeIT-videos');
+    await fs.mkdir(dir, { recursive: true });
+    const full = path.join(dir, safe);
+    await fs.writeFile(full, Buffer.from(String(b64 || ''), 'base64'));
+    return { ok: true, path: full };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err).slice(0, 300) };
+  }
+});
+
 // ---------- IPC: command runner (no native node-pty in v0.1; child_process, cross-platform) ----------
 ipcMain.handle('exec:run', async (_e, cmd) => {
   return new Promise((resolve) => {

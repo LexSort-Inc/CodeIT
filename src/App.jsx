@@ -10,6 +10,7 @@ import UsagePane from './components/UsagePane.jsx';
 import EditorPaneInner from './components/EditorPaneInner.jsx';
 import TasksPane from './components/TasksPane.jsx';
 import ImagesPane from './components/ImagesPane.jsx';
+import VideosPane from './components/VideosPane.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import ChatSearch from './components/ChatSearch.jsx';
@@ -22,7 +23,7 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
-  const [rightTab, setRightTab] = useState('terminal'); // terminal | tasks | notes | web | images
+  const [rightTab, setRightTab] = useState('terminal'); // terminal | tasks | notes | web | images | videos
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
@@ -228,8 +229,8 @@ export default function App() {
         </section>
         <section className="pane side" aria-label="Terminal, notes, web">
           <div className="pane-title tabs">
-            <Tabs tabs={['terminal', 'tasks', 'notes', 'web', 'images']} active={rightTab} onChange={setRightTab}
-              labels={{ terminal: 'Terminal', tasks: 'Tasks', notes: 'Notes', web: 'Web dock', images: 'Images' }} />
+            <Tabs tabs={['terminal', 'tasks', 'notes', 'web', 'images', 'videos']} active={rightTab} onChange={setRightTab}
+              labels={{ terminal: 'Terminal', tasks: 'Tasks', notes: 'Notes', web: 'Web dock', images: 'Images', videos: 'Videos' }} />
           </div>
           <div className="pane-body">
             {rightTab === 'terminal' ? <TerminalPane cwd={root} />
@@ -244,7 +245,8 @@ export default function App() {
                     placeholder="Stack, conventions, goals, gotchas…" spellCheck={false} />
                   <div className="toolbar"><span className="spacer" /><button className="btn btn-sm btn-primary" onClick={saveNotes} disabled={!active}>Save notes</button></div>
                 </div>
-              ) : rightTab === 'images' ? <ImagesPane project={active} /> : <WebviewDock />}
+              ) : rightTab === 'images' ? <ImagesPane project={active} />
+                : rightTab === 'videos' ? <VideosPane project={active} /> : <WebviewDock />}
           </div>
         </section>
       </div>
