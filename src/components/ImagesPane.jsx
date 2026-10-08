@@ -11,8 +11,11 @@ const SIZES = [
   { id: '16:9', label: 'Wide 1216×704', w: 1216, h: 704 },
 ];
 
+const IS_WIN = typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || '');
+
 export default function ImagesPane({ project }) {
   const [ready, setReady] = useState(null); // null=unknown, true/false
+  const [starting, setStarting] = useState(false);
   const [info, setInfo] = useState(null);
   const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState(SIZES[0]);
@@ -36,6 +39,17 @@ export default function ImagesPane({ project }) {
     }
   }
   useEffect(() => { ping(); }, []);
+
+  async function startServer() {
+    if (!window.codeit?.imgserversStart || starting) return;
+    setStarting(true);
+    try {
+      await window.codeit.imgserversStart('pony');
+      await ping();
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function generate() {
     if (!prompt.trim() || busy) return;
@@ -73,12 +87,22 @@ export default function ImagesPane({ project }) {
         <span className="spacer" />
         <button className="btn btn-sm btn-ghost" onClick={ping} title="Recheck">↻</button>
       </div>
-      {ready === false && (
+      {ready === false && !IS_WIN && (
         <div className="pad" style={{ fontSize: 12, color: 'var(--dim)', borderBottom: '1px solid var(--line)' }}>
           Start the server first (Mac):
           <pre style={{ marginTop: 4 }}>cd ~/PonyServer && ./.venv/bin/python \
   /Volumes/TOSHIBA\ EXT/JUST_ME_MEDIA_VAULT/02_ACTIVE_PROJECTS/CodeIT/servers/sdxl/server_sdxl_mac.py</pre>
           Needs <code>Models/pony-v6-xl</code> downloaded — see <code>servers/sdxl/README.md</code>.
+        </div>
+      )}
+      {ready === false && IS_WIN && (
+        <div className="pad" style={{ fontSize: 12, color: 'var(--dim)', borderBottom: '1px solid var(--line)' }}>
+          The local quality server is offline. CodeIT normally starts it on launch —
+          {window.codeit?.imgserversStart ? (
+            <span> <button className="btn btn-sm btn-primary" onClick={startServer} disabled={starting}>{starting ? 'Starting…' : 'Start server'}</button></span>
+          ) : (
+            <span> start it manually — see <code>servers/sdxl/README.md</code> (Windows).</span>
+          )}
         </div>
       )}
       {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}</div>}
