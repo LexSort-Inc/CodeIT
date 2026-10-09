@@ -39,16 +39,12 @@ Then open CodeIT → right pane → **Images**. A 1024² render takes ~1–3 min
   `FLASH_ATTENTION=1`, `KV_CACHE_TYPE=q8_0`, `MAX_LOADED_MODELS=1`.
 - Run one heavy resident at a time (Ollama XOR SDXL XOR LTX).
 
-## Keep-alive (launchd, Mac)
+## Keep-alive (app-managed)
 
-The server runs as a LaunchAgent so it survives shells and restarts itself:
-
-- Plist: `~/Library/LaunchAgents/com.codeit.sdxl-mac.plist`
-- Runs: `~/PonyServer/server_sdxl_mac.py` (**local SSD copy** of this repo file —
-  launching Python with its script on the external vault stalls at startup
-  when the drive sleeps; re-copy after editing: `cp servers/sdxl/server_sdxl_mac.py ~/PonyServer/`)
-- Logs: `~/PonyServer/server.log`
-- `launchctl load/unload ~/Library/LaunchAgents/com.codeit.sdxl-mac.plist`
+CodeIT starts this server on launch and kills it on quit (nothing resident
+when the app is closed). The legacy `com.codeit.sdxl-mac` LaunchAgent is
+disabled — do not re-enable it or you'll get double loads. Logs:
+`~/PonyServer/sdxl.codeit.log`.
 
 ## API
 

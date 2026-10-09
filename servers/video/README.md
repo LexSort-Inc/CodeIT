@@ -30,7 +30,9 @@ panic. Start it when you want clips, unload when done.)
 
 Or keep-alive via launchd: `~/Library/LaunchAgents/com.codeit.video-mac.plist`
 (local SSD copy at `~/PonyServer/server_video_mac.py` — same external-drive
-startup caveat as the image server; re-copy after editing).
+startup caveat as the image server; re-copy after editing). NOTE: the plist is
+manual-start only (no RunAtLoad) and CodeIT itself starts the server lazily on
+first Videos-tab open, killing it on quit — prefer the app path.
 
 Then CodeIT → right pane → **Videos**. A 2s clip takes ~3–8 min on 16GB MPS.
 `Save` drops MP4s into `<project>/.codeit/videos/` (or `~/Downloads/CodeIT-videos/`).

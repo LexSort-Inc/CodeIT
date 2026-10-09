@@ -33,11 +33,24 @@ export default function ImagesPane({ project }) {
       if (!j.ready) setErr(j.error || 'model not loaded — check server log');
       else setErr('');
     } catch {
+      // Server may still be starting (app-managed) — ask main to ensure it.
+      try { await window.codeit?.imagesEnsure?.(); } catch {}
       setReady(false);
       setErr('');
     }
   }
-  useEffect(() => { ping(); }, []);
+  useEffect(() => {
+    ping();
+    // Poll while the (app-managed) server warms up; stop once ready.
+    const t = setInterval(async () => {
+      try {
+        const r = await fetch(`${HOST}/info`);
+        const j = await r.json();
+        if (j.ready) { setInfo(j); setReady(true); setErr(''); clearInterval(t); }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(t);
+  }, []);
 
   async function generate() {
     if (!prompt.trim() || busy) return;
@@ -93,10 +106,9 @@ export default function ImagesPane({ project }) {
       </div>
       {ready === false && (
         <div className="pad" style={{ fontSize: 12, color: 'var(--dim)', borderBottom: '1px solid var(--line)' }}>
-          Start the server first (Mac):
-          <pre style={{ marginTop: 4 }}>cd ~/PonyServer && ./.venv/bin/python \
-  /Volumes/TOSHIBA\ EXT/JUST_ME_MEDIA_VAULT/02_ACTIVE_PROJECTS/CodeIT/servers/sdxl/server_sdxl_mac.py</pre>
-          Needs <code>Models/pony-v6-xl</code> downloaded — see <code>servers/sdxl/README.md</code>.
+          Starting the local server (first launch loads ~5GB, takes a few minutes)…
+          If this persists, check <code>~/PonyServer/sdxl.codeit.log</code> or start manually —
+          see <code>servers/sdxl/README.md</code>.
         </div>
       )}
       {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}</div>}

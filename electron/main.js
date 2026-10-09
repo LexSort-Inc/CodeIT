@@ -6,6 +6,7 @@ const fsSync = require('fs');
 const { exec, execFile } = require('child_process');
 const { CATALOG } = require('./catalog');
 const mcp = require('./mcp');
+const backends = require('./backends');
 
 const isDev = !app.isPackaged;
 let mainWindow;
@@ -89,9 +90,19 @@ async function createWindow() {
   } catch { /* first run */ }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await createWindow();
+  // App-managed backends: load on start (fire-and-forget; panes poll readiness).
+  backends.ensureOllama().catch(() => {});
+  backends.ensureImage().catch(() => {});
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+app.on('before-quit', () => {
+  // Free the RAM: kill our servers + unload Ollama models + stop MCP servers.
+  try { backends.stopBackends(); } catch {}
+  try { mcp.stopAll(); } catch {}
 });
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -696,4 +707,12 @@ ipcMain.handle('tools:server-tools', async (_e, serverId) => {
   }
 });
 
-app.on('before-quit', () => mcp.stopAll());
+// ---------- IPC: backend lifecycle (app-managed models) ----------
+// Renderer calls ensure on pane mount (idempotent); main auto-starts
+// Ollama + SDXL at launch. Everything is killed on quit.
+ipcMain.handle('backends:ensure', async () => {
+  const [ollama, image] = await Promise.all([backends.ensureOllama(), backends.ensureImage()]);
+  return { ollama, image };
+});
+ipcMain.handle('videos:ensure', async () => backends.ensureVideo());
+ipcMain.handle('images:ensure', async () => backends.ensureImage());

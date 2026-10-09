@@ -38,11 +38,24 @@ export default function VideosPane({ project }) {
       setReady(!!j.ready);
       setErr(j.ready ? '' : (j.error || 'model not loaded — check server log'));
     } catch {
+      // Video server starts lazily (14GB load) — ask main to ensure it.
+      try { await window.codeit?.videosEnsure?.(); } catch {}
       setReady(false);
       setErr('');
     }
   }
-  useEffect(() => { ping(); }, []);
+  useEffect(() => {
+    ping();
+    // Poll while the (lazily started) server warms up; stop once ready.
+    const t = setInterval(async () => {
+      try {
+        const r = await fetch(`${HOST}/info`);
+        const j = await r.json();
+        if (j.ready) { setInfo(j); setReady(true); setErr(''); clearInterval(t); }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(t);
+  }, []);
   useEffect(() => () => clearInterval(timer.current), []);
 
   function fmtElapsed(s) {
@@ -94,7 +107,8 @@ export default function VideosPane({ project }) {
       </div>
       {ready === false && (
         <div className="pad" style={{ fontSize: 12, color: 'var(--dim)', borderBottom: '1px solid var(--line)' }}>
-          Start the server first (Mac): <code>launchctl load ~/Library/LaunchAgents/com.codeit.video-mac.plist</code> —
+          Starting the local server on first open (14GB load, takes several minutes)…
+          If this persists, check <code>~/PonyServer/video.codeit.log</code> or start manually —
           see <code>servers/video/README.md</code>.
         </div>
       )}
