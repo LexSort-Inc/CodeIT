@@ -21,7 +21,8 @@ export default function VideosPane({ project }) {
   const [prompt, setPrompt] = useState('');
   const [length, setLength] = useState(LENGTHS[1]);
   const [size, setSize] = useState(SIZES[0]);
-  const [steps, setSteps] = useState(25);
+  const [steps, setSteps] = useState(45);
+  const [recipe, setRecipe] = useState('dev'); // dev (quality) | fast (distilled-style)
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -60,7 +61,7 @@ export default function VideosPane({ project }) {
       const r = await fetch(`${HOST}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), width: size.w, height: size.h, frames: length.frames, steps, seed }),
+        body: JSON.stringify({ prompt: prompt.trim(), width: size.w, height: size.h, frames: length.frames, steps, recipe, seed }),
       });
       if (!r.ok) throw new Error(`server ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const j = await r.json();
@@ -110,6 +111,10 @@ export default function VideosPane({ project }) {
           </select>
           <select aria-label="Video size" value={size.id} onChange={(e) => setSize(SIZES.find((s) => s.id === e.target.value))}>
             {SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+          <select aria-label="Recipe" value={recipe} onChange={(e) => setRecipe(e.target.value)} title="dev: full quality (slower) · fast: distilled-style (quicker, softer)">
+            <option value="dev">Recipe: quality</option>
+            <option value="fast">Recipe: fast</option>
           </select>
           <label style={{ fontSize: 12, color: 'var(--dim)' }}>Steps
             <input type="number" min={5} max={60} value={steps} onChange={(e) => setSteps(+e.target.value || 30)} style={{ width: 56, marginLeft: 4 }} />

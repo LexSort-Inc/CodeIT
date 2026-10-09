@@ -26,7 +26,8 @@ from pydantic import BaseModel
 import imageio.v2 as imageio
 import numpy as np
 import torch
-from diffusers import LTXPipeline
+from diffusers import LTXPipeline, LTXImageToVideoPipeline
+from PIL import Image
 from transformers import T5EncoderModel
 
 MODEL_DIR = os.path.expanduser(os.getenv("MODEL_DIR", "~/PonyServer/Models/ltx-video"))
@@ -42,7 +43,45 @@ app.add_middleware(
 )
 
 pipe = None
+i2v_pipe = None
 load_error = None
+
+
+def load_i2v():
+    global i2v_pipe, load_error
+    if i2v_pipe is not None:
+        return True
+    try:
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        ckpt = find_ckpt()
+        i2v_pipe = LTXImageToVideoPipeline.from_single_file(
+            ckpt, torch_dtype=torch.float16,
+            text_encoder=T5EncoderModel.from_pretrained(MODEL_DIR, subfolder="text_encoder",
+                                                        torch_dtype=torch.float16))
+        i2v_pipe = i2v_pipe.to(device)
+        try:
+            # Keep everything on MPS (sequential offload breaks text-encoder
+            # device placement in the i2v path: "Passed CPU tensor to MPS op").
+            i2v_pipe.enable_attention_slicing()
+            i2v_pipe.vae.enable_tiling()
+        except Exception:
+            pass
+        print("[video-mac] i2v loaded", flush=True)
+        return True
+    except Exception as e:  # noqa: BLE001
+        load_error = str(e)[:500]
+        print(f"[video-mac] i2v load failed: {load_error}", flush=True)
+        return False
+
+
+def find_ckpt():
+    ckpt = os.path.join(MODEL_DIR, "ltx-video-2b-v0.9.5.safetensors")
+    if not os.path.isfile(ckpt):
+        alt = sorted(glob.glob(os.path.join(MODEL_DIR, "*2b*.safetensors")))
+        if not alt:
+            raise RuntimeError(f"no LTX 2B checkpoint in {MODEL_DIR}")
+        ckpt = alt[0]
+    return ckpt
 
 
 def load_pipe():
@@ -52,20 +91,20 @@ def load_pipe():
     try:
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         # Single-file 2B checkpoint (repo has no diffusers folder layout for 2B).
-        ckpt = os.path.join(MODEL_DIR, "ltx-video-2b-v0.9.5.safetensors")
-        if not os.path.isfile(ckpt):
-            alt = sorted(glob.glob(os.path.join(MODEL_DIR, "*2b*.safetensors")))
-            if not alt:
-                raise RuntimeError(f"no LTX 2B checkpoint in {MODEL_DIR}")
-            ckpt = alt[0]
+        ckpt = find_ckpt()
         pipe = LTXPipeline.from_single_file(ckpt, torch_dtype=torch.float16,
             text_encoder=T5EncoderModel.from_pretrained(MODEL_DIR, subfolder="text_encoder",
                                                         torch_dtype=torch.float16))
         pipe = pipe.to(device)
         try:
-            pipe.enable_attention_slicing()
+            # 16GB unified: stream submodules (esp. 9GB T5-XXL) on/off MPS
+            # instead of pinning everything — avoids Metal encoder OOMs.
+            pipe.enable_sequential_cpu_offload()
         except Exception:
-            pass
+            try:
+                pipe.enable_attention_slicing()
+            except Exception:
+                pass
         print(f"[video-mac] loaded on {device} from {MODEL_DIR}", flush=True)
     except Exception as e:  # noqa: BLE001 — surfaced via /info
         load_error = str(e)[:500]
@@ -74,13 +113,14 @@ def load_pipe():
 
 class GenReq(BaseModel):
     prompt: str
-    negative_prompt: str = "worst quality, blurry, watermark, text, deformed"
+    negative_prompt: str = "worst quality, inconsistent motion, blurry, jittery, distorted, flickering, watermark, text"
     width: int = 768
     height: int = 512
     frames: int = 49
     fps: int = 24
-    steps: int = 30
-    guidance: float = 1.0  # 0.9-distilled model has guidance baked in; 1.0 verified best
+    steps: int = -1  # -1 = recipe default (dev 45, fast 20)
+    guidance: float = -1.0  # -1 = recipe default (dev 3.5, fast 1.0)
+    recipe: str = "dev"  # dev (0.9.x non-distilled weights) | fast (distilled-style)
     seed: int = -1
 
 
@@ -93,6 +133,7 @@ def info():
         "device": "mps" if torch.backends.mps.is_available() else "cpu",
         "dtype": "fp16",
         "ready": pipe is not None,
+        "i2v_ready": i2v_pipe is not None,
         "error": load_error,
     }
 
@@ -117,21 +158,28 @@ def generate(req: GenReq, format: str = "json"):
     h = max(256, min(1024, int(req.height))) // 32 * 32
     frames = min(161, max(9, int(req.frames)))
     frames = (frames - 1) // 8 * 8 + 1
-    steps = max(5, min(60, int(req.steps)))
+    dev = (req.recipe or "dev").lower() != "fast"
+    steps = int(req.steps) if int(req.steps) > 0 else (45 if dev else 20)
+    steps = max(5, min(60, steps))
+    guidance = float(req.guidance) if float(req.guidance) > 0 else (3.5 if dev else 1.0)
     seed = req.seed if req.seed >= 0 else int(time.time()) % 2**31
     gen = torch.Generator(device="mps" if torch.backends.mps.is_available() else "cpu").manual_seed(seed)
     t0 = time.time()
+    call = dict(
+        prompt=req.prompt,
+        negative_prompt=req.negative_prompt,
+        width=w,
+        height=h,
+        num_frames=frames,
+        num_inference_steps=steps,
+        guidance_scale=guidance,
+        generator=gen,
+    )
+    if dev:
+        # 0.9.x dev recipe: proper decode schedule + rescaled guidance.
+        call.update(decode_timestep=0.05, decode_noise_scale=0.025, guidance_rescale=0.7)
     with torch.inference_mode():
-        out = pipe(
-            prompt=req.prompt,
-            negative_prompt=req.negative_prompt,
-            width=w,
-            height=h,
-            num_frames=frames,
-            num_inference_steps=steps,
-            guidance_scale=float(req.guidance),
-            generator=gen,
-        )
+        out = pipe(**call)
     mp4 = frames_to_mp4(out.frames[0], fps=max(8, min(30, int(req.fps))))
     ms = int((time.time() - t0) * 1000)
     if format == "mp4":
@@ -144,6 +192,61 @@ def generate(req: GenReq, format: str = "json"):
         "fps": max(8, min(30, int(req.fps))),
         "seed": seed,
         "ms": ms,
+    }
+
+
+class AnimateReq(BaseModel):
+    image_b64: str  # PNG/JPEG source frame (e.g. a Pony still)
+    prompt: str = ""  # motion description; image dominates
+    negative_prompt: str = "worst quality, inconsistent motion, blurry, jittery, distorted, flickering"
+    width: int = 768
+    height: int = 512
+    frames: int = 49
+    fps: int = 24
+    steps: int = 30
+    guidance: float = 3.0
+    seed: int = -1
+
+
+@app.post("/animate")
+def animate(req: AnimateReq, format: str = "json"):
+    if not load_i2v():
+        raise HTTPException(status_code=503, detail=load_error or "i2v not loaded")
+    try:
+        src = Image.open(io.BytesIO(base64.b64decode(req.image_b64))).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="unreadable image_b64")
+    w = max(256, min(1024, int(req.width))) // 32 * 32
+    h = max(256, min(1024, int(req.height))) // 32 * 32
+    src = src.resize((w, h), Image.LANCZOS)
+    frames = min(161, max(9, int(req.frames)))
+    frames = (frames - 1) // 8 * 8 + 1
+    steps = max(5, min(60, int(req.steps)))
+    seed = req.seed if req.seed >= 0 else int(time.time()) % 2**31
+    gen = torch.Generator(device="mps" if torch.backends.mps.is_available() else "cpu").manual_seed(seed)
+    t0 = time.time()
+    with torch.inference_mode():
+        out = i2v_pipe(
+            image=src,
+            prompt=req.prompt or "gentle motion, slow push-in",
+            negative_prompt=req.negative_prompt,
+            width=w,
+            height=h,
+            num_frames=frames,
+            num_inference_steps=steps,
+            guidance_scale=float(req.guidance),
+            decode_timestep=0.05,
+            decode_noise_scale=0.025,
+            generator=gen,
+        )
+    mp4 = frames_to_mp4(out.frames[0], fps=max(8, min(30, int(req.fps))))
+    ms = int((time.time() - t0) * 1000)
+    if format == "mp4":
+        return Response(content=mp4, media_type="video/mp4")
+    return {
+        "video_b64": base64.b64encode(mp4).decode(),
+        "width": w, "height": h, "frames": frames,
+        "fps": max(8, min(30, int(req.fps))), "seed": seed, "ms": ms,
     }
 
 

@@ -23,6 +23,10 @@ cd ~/PonyServer
 MODEL_DIR=~/PonyServer/Models/ltx-video PORT=8003 ./.venv/bin/python \
   "/Volumes/TOSHIBA EXT/JUST_ME_MEDIA_VAULT/02_ACTIVE_PROJECTS/CodeIT/servers/video/server_video_mac.py"
 ```
+Or: `launchctl load ~/Library/LaunchAgents/com.codeit.video-mac.plist`
+(the plist is **manual-start only, no RunAtLoad**: the 2B+T5 load needs ~14GB
+and must never auto-start alongside SDXL+Ollama on 16GB — Oct 2026 watchdog
+panic. Start it when you want clips, unload when done.)
 
 Or keep-alive via launchd: `~/Library/LaunchAgents/com.codeit.video-mac.plist`
 (local SSD copy at `~/PonyServer/server_video_mac.py` — same external-drive
