@@ -25,7 +25,19 @@ MODEL_DIR=~/PonyServer/Models/pony-v6-xl PORT=8002 ./.venv/bin/python \
 ```
 
 Then open CodeIT → right pane → **Images**. A 1024² render takes ~1–3 min on
-16GB MPS. `Save to project` drops PNGs into `<project>/.codeit/images/`.
+16GB MPS. `Save to project` drops PNGs into `<project>/.codeit/images/>`.
+
+## Mac tuning (16GB M1 Pro, Oct 2026)
+
+- SDXL LaunchAgent sets `PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.2` +
+  `PYTORCH_MPS_LOW_WATERMARK_RATIO=1.0` (fail fast instead of swap-death;
+  low must stay below high). The LTX video server does NOT set a watermark:
+  its 2B + T5-XXL load legitimately needs ~14GB+ and trips any cap —
+  instead it relies on one-resident-at-a-time discipline.
+- Both set `PYTORCH_ENABLE_MPS_FALLBACK=1`.
+- Ollama side (persistent `com.codeit.ollama-env` agent): `KEEP_ALIVE=30m`,
+  `FLASH_ATTENTION=1`, `KV_CACHE_TYPE=q8_0`, `MAX_LOADED_MODELS=1`.
+- Run one heavy resident at a time (Ollama XOR SDXL XOR LTX).
 
 ## Keep-alive (launchd, Mac)
 
