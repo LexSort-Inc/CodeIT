@@ -47,6 +47,18 @@ i2v_pipe = None
 load_error = None
 
 
+def make_text_encoder():
+    # 9GB T5-XXL on a busy 16GB desktop: stream weights straight onto devices
+    # with disk offload instead of staging it all in RAM at load time.
+    offload = os.path.join(os.path.expanduser("~/PonyServer"), ".t5-offload")
+    os.makedirs(offload, exist_ok=True)
+    return T5EncoderModel.from_pretrained(
+        MODEL_DIR, subfolder="text_encoder", torch_dtype=torch.float16,
+        device_map="auto", offload_folder=offload,
+        offload_state_dict=True,
+    )
+
+
 def load_i2v():
     global i2v_pipe, load_error
     if i2v_pipe is not None:
@@ -56,9 +68,30 @@ def load_i2v():
         ckpt = find_ckpt()
         i2v_pipe = LTXImageToVideoPipeline.from_single_file(
             ckpt, torch_dtype=torch.float16,
-            text_encoder=T5EncoderModel.from_pretrained(MODEL_DIR, subfolder="text_encoder",
-                                                        torch_dtype=torch.float16))
-        i2v_pipe = i2v_pipe.to(device)
+            text_encoder=make_text_encoder())
+        try:
+            # No-op when components are device-mapped already.
+            i2v_pipe = i2v_pipe.to(device)
+        except Exception:
+            pass
+        # Belt-and-braces: from_single_file can leave the injected text
+        # encoder behind on CPU -> "Passed CPU tensor to MPS op" at encode.
+        try:
+            if getattr(i2v_pipe, "text_encoder", None) is not None:
+                i2v_pipe.text_encoder = i2v_pipe.text_encoder.to(device)
+        except Exception as e:  # noqa: BLE001
+            print(f"[video-mac] text-encoder move: {str(e)[:200]}", flush=True)
+        try:
+            devs = {}
+            for cname in ("text_encoder", "transformer", "vae"):
+                comp = getattr(i2v_pipe, cname, None)
+                try:
+                    devs[cname] = str(next(comp.parameters()).device)
+                except Exception:
+                    devs[cname] = "?"
+            print(f"[video-mac] i2v devices: {devs}", flush=True)
+        except Exception:
+            pass
         try:
             # Keep everything on MPS (sequential offload breaks text-encoder
             # device placement in the i2v path: "Passed CPU tensor to MPS op").
@@ -93,12 +126,19 @@ def load_pipe():
         # Single-file 2B checkpoint (repo has no diffusers folder layout for 2B).
         ckpt = find_ckpt()
         pipe = LTXPipeline.from_single_file(ckpt, torch_dtype=torch.float16,
-            text_encoder=T5EncoderModel.from_pretrained(MODEL_DIR, subfolder="text_encoder",
-                                                        torch_dtype=torch.float16))
-        pipe = pipe.to(device)
+            text_encoder=make_text_encoder())
+        try:
+            pipe = pipe.to(device)
+        except Exception:
+            pass
+        try:
+            if getattr(pipe, "text_encoder", None) is not None:
+                pipe.text_encoder = pipe.text_encoder.to(device)
+        except Exception as e:  # noqa: BLE001
+            print(f"[video-mac] text-encoder move: {str(e)[:200]}", flush=True)
         try:
             # Pinned on MPS with slicing (sequential offload races text-encoder
-            # placement in this path: intermittent "Passed CPU tensor to MPS op").
+            # placement in this path: "Passed CPU tensor to MPS op").
             pipe.enable_attention_slicing()
             pipe.vae.enable_tiling()
         except Exception:

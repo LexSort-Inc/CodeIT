@@ -88,12 +88,31 @@ async function ensureOllama() {
   }
 }
 
+function memHeadroomGB() {
+  // Free + reclaimable (inactive/speculative) on darwin; -1 when unknown.
+  try {
+    if (process.platform !== 'darwin') return -1;
+    const out = require('child_process').execFileSync('vm_stat', { timeout: 5000 }).toString();
+    const get = (k) => { const m = out.match(new RegExp(k + ':\\s+([0-9]+)')); return m ? Number(m[1]) : 0; };
+    const pages = get('Pages free') + get('Pages inactive') + get('Pages speculative');
+    return (pages * 16384) / 1024 / 1024 / 1024;
+  } catch { return -1; }
+}
+
+function otherGiantRunning(name) {
+  const other = name === 'video' ? 'sdxl' : 'video';
+  const c = children.get(other);
+  return Boolean(c && !c.killed && c.exitCode == null);
+}
+
 async function ensureImage() {
   if (await portUp(8002)) return { ok: true, started: false };
   if (process.platform !== 'darwin') return { ok: false, error: 'managed externally on this platform' };
-  // One giant at a time: SDXL coming up unloads the 14GB video server.
+  // Never sabotage a running sibling: refuse with guidance instead of killing.
   // (Ollama stays — chat + one renderer fits 16GB.)
-  stopOne('video');
+  if (otherGiantRunning('sdxl')) {
+    return { ok: false, error: 'video server is running — stop it (Videos tab will idle it) before starting images' };
+  }
   const s = pyServerSpec('sdxl');
   if (!fs.existsSync(s.python) || !fs.existsSync(s.script)) {
     return { ok: false, error: 'PonyServer venv/script missing — see servers/sdxl/README.md' };
@@ -105,8 +124,13 @@ async function ensureImage() {
 async function ensureVideo() {
   if (await portUp(8003)) return { ok: true, started: false };
   if (process.platform !== 'darwin') return { ok: false, error: 'managed externally on this platform' };
-  // One giant at a time: the 14GB video load unloads SDXL first.
-  stopOne('sdxl');
+  if (otherGiantRunning('video')) {
+    return { ok: false, error: 'image server is running — switch away from Images first to free RAM' };
+  }
+  const headroom = memHeadroomGB();
+  if (headroom >= 0 && headroom < 6) {
+    return { ok: false, error: `low memory (${headroom.toFixed(1)}GB free) — quit a heavy app and retry` };
+  }
   const s = pyServerSpec('video');
   if (!fs.existsSync(s.python) || !fs.existsSync(s.script)) {
     return { ok: false, error: 'PonyServer venv/script missing — see servers/video/README.md' };

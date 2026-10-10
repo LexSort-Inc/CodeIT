@@ -34,7 +34,10 @@ export default function ImagesPane({ project }) {
       else setErr('');
     } catch {
       // Server may still be starting (app-managed) — ask main to ensure it.
-      try { await window.codeit?.imagesEnsure?.(); } catch {}
+      try {
+        const r = await window.codeit?.imagesEnsure?.();
+        if (r && !r.ok && r.error) { setErr(r.error); return; }
+      } catch {}
       setReady(false);
       setErr('');
     }

@@ -39,7 +39,10 @@ export default function VideosPane({ project }) {
       setErr(j.ready ? '' : (j.error || 'model not loaded — check server log'));
     } catch {
       // Video server starts lazily (14GB load) — ask main to ensure it.
-      try { await window.codeit?.videosEnsure?.(); } catch {}
+      try {
+        const r = await window.codeit?.videosEnsure?.();
+        if (r && !r.ok && r.error) { setErr(r.error); return; }
+      } catch {}
       setReady(false);
       setErr('');
     }
