@@ -102,6 +102,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   const [skills, setSkills] = useState([]);
   const [enabledSkillIds, setEnabledSkillIds] = useState(new Set());
   const [mcpTools, setMcpTools] = useState([]);
+  const [toolsLoading, setToolsLoading] = useState(true);
   const saveTimer = useRef(null);
   const approvalResolve = useRef({});
   const threadCount = useRef(0);
@@ -172,7 +173,8 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
   // load skills + enabled MCP tools for this project
   useEffect(() => {
     (async () => {
-      if (!window.codeit) return;
+      if (!window.codeit) { setToolsLoading(false); return; }
+      setToolsLoading(true);
       const [sk, catalog] = await Promise.all([window.codeit.skillsList(), window.codeit.toolsCatalog()]);
       const enabled = new Set(catalog.filter((c) => c.kind === 'skill' && c.enabled).map((c) => c.id));
       const byId = Object.fromEntries(catalog.map((c) => [c.id, c]));
@@ -180,6 +182,7 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
       setEnabledSkillIds(enabled);
       const tools = await getEnabledMcpTools();
       setMcpTools(tools);
+      setToolsLoading(false);
       onToolCount?.(tools.length);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -603,10 +606,11 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         <button className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setPlanMode(!planMode)}
           title="Plan mode: model plans, you approve, then it executes" aria-pressed={planMode}>Plan</button>
         <span>{project ? `Project: ${project.name}` : 'No project'}</span>
-        {mcpTools.length > 0 && (onOpenExtensions
+        {mcpTools.length > 0 ? (onOpenExtensions
           ? <button className="btn btn-sm btn-ghost" onClick={onOpenExtensions}
               title={`${mcpTools.length} tools loaded (memory, file search, web, docs…). Click to manage in Extensions.`}>🧰{mcpTools.length}</button>
-          : <span>🧰{mcpTools.length}</span>)}
+          : <span>🧰{mcpTools.length}</span>)
+          : (toolsLoading ? <span title="Starting tool servers…">🧰…</span> : null)}
         {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
       </div>
       <div className="messages" role="log" aria-live="polite" aria-label="Chat messages" style={compare && compareThreads.length > 1 ? { flexDirection: 'row', gap: 8 } : undefined}>
