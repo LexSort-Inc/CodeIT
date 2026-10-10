@@ -91,6 +91,9 @@ async function ensureOllama() {
 async function ensureImage() {
   if (await portUp(8002)) return { ok: true, started: false };
   if (process.platform !== 'darwin') return { ok: false, error: 'managed externally on this platform' };
+  // One giant at a time: SDXL coming up unloads the 14GB video server.
+  // (Ollama stays — chat + one renderer fits 16GB.)
+  stopOne('video');
   const s = pyServerSpec('sdxl');
   if (!fs.existsSync(s.python) || !fs.existsSync(s.script)) {
     return { ok: false, error: 'PonyServer venv/script missing — see servers/sdxl/README.md' };
@@ -102,6 +105,8 @@ async function ensureImage() {
 async function ensureVideo() {
   if (await portUp(8003)) return { ok: true, started: false };
   if (process.platform !== 'darwin') return { ok: false, error: 'managed externally on this platform' };
+  // One giant at a time: the 14GB video load unloads SDXL first.
+  stopOne('sdxl');
   const s = pyServerSpec('video');
   if (!fs.existsSync(s.python) || !fs.existsSync(s.script)) {
     return { ok: false, error: 'PonyServer venv/script missing — see servers/video/README.md' };

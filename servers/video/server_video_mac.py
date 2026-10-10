@@ -97,14 +97,12 @@ def load_pipe():
                                                         torch_dtype=torch.float16))
         pipe = pipe.to(device)
         try:
-            # 16GB unified: stream submodules (esp. 9GB T5-XXL) on/off MPS
-            # instead of pinning everything — avoids Metal encoder OOMs.
-            pipe.enable_sequential_cpu_offload()
+            # Pinned on MPS with slicing (sequential offload races text-encoder
+            # placement in this path: intermittent "Passed CPU tensor to MPS op").
+            pipe.enable_attention_slicing()
+            pipe.vae.enable_tiling()
         except Exception:
-            try:
-                pipe.enable_attention_slicing()
-            except Exception:
-                pass
+            pass
         print(f"[video-mac] loaded on {device} from {MODEL_DIR}", flush=True)
     except Exception as e:  # noqa: BLE001 — surfaced via /info
         load_error = str(e)[:500]
