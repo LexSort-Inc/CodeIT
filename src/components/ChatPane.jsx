@@ -90,7 +90,7 @@ function estimate(text, model) {
 }
 
 export default function ChatPane({ provider, model, fileContext, setFileContext, project, projectNotes,
-  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor, openThreadId, onThreadOpened }) {
+  onToolCount, planMode, setPlanMode, onUsageTick, onThreadSwitch, registerThreadEditor, openThreadId, onThreadOpened, onOpenExtensions }) {
   const projectId = project?.id || 'default';
   const [threads, setThreads] = useState(() => [newThread(provider, model, 0)]);
   const [activeId, setActiveId] = useState(() => threads[0].id);
@@ -603,7 +603,10 @@ export default function ChatPane({ provider, model, fileContext, setFileContext,
         <button className={`btn btn-sm${planMode ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setPlanMode(!planMode)}
           title="Plan mode: model plans, you approve, then it executes" aria-pressed={planMode}>Plan</button>
         <span>{project ? `Project: ${project.name}` : 'No project'}</span>
-        {mcpTools.length > 0 && <span>🧰{mcpTools.length}</span>}
+        {mcpTools.length > 0 && (onOpenExtensions
+          ? <button className="btn btn-sm btn-ghost" onClick={onOpenExtensions}
+              title={`${mcpTools.length} tools loaded (memory, file search, web, docs…). Click to manage in Extensions.`}>🧰{mcpTools.length}</button>
+          : <span>🧰{mcpTools.length}</span>)}
         {threadCost(active) && <span title="Last call cost">· {threadCost(active)}</span>}
       </div>
       <div className="messages" role="log" aria-live="polite" aria-label="Chat messages" style={compare && compareThreads.length > 1 ? { flexDirection: 'row', gap: 8 } : undefined}>

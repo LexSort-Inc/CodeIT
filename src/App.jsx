@@ -218,7 +218,8 @@ export default function App() {
               project={active} projectNotes={notes} onToolCount={setToolCount} planMode={planMode} setPlanMode={setPlanMode}
               onUsageTick={() => setUsageTick((t) => t + 1)} onThreadSwitch={onThreadSwitch}
               registerThreadEditor={(fn) => { threadEditorRef.current = fn; }}
-              openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)} />
+              openThreadId={pendingThread} onThreadOpened={() => setPendingThread(null)}
+              onOpenExtensions={() => setRailTab('extensions')} />
           </div>
         </section>
         <section className={`pane files-pane${explorerOpen ? '' : ' hide-explorer'}${editorOpen ? '' : ' hide-editor'}`} aria-label="Files and editor">
