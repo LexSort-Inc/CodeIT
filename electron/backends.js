@@ -102,7 +102,27 @@ function memHeadroomGB() {
 function otherGiantRunning(name) {
   const other = name === 'video' ? 'sdxl' : 'video';
   const c = children.get(other);
-  return Boolean(c && !c.killed && c.exitCode == null);
+  if (c && !c.killed && c.exitCode == null) return other;
+  return null;
+}
+
+// Boot set for the tab the user last had open: chat-side tabs need only
+// Ollama; images adds SDXL; videos adds the video server (never both giants).
+async function bootFor(tab) {
+  const ollama = await ensureOllama();
+  let extra = { ok: true, skipped: true };
+  if (tab === 'images') extra = await ensureImage();
+  else if (tab === 'videos') extra = await ensureVideo();
+  return { ollama, extra };
+}
+
+// One-click switch: unload the other giant, start this one.
+async function switchTo(target) {
+  const other = target === 'video' ? 'sdxl' : 'video';
+  stopOne(other);
+  // Give the OS a breath to reclaim before the next giant loads.
+  await new Promise((r) => setTimeout(r, 3000));
+  return target === 'video' ? ensureVideo() : ensureImage();
 }
 
 async function ensureImage() {
@@ -153,4 +173,4 @@ function stopBackends() {
   } catch {}
 }
 
-module.exports = { ensureOllama, ensureImage, ensureVideo, stopBackends, portUp };
+module.exports = { ensureOllama, ensureImage, ensureVideo, bootFor, switchTo, stopBackends, portUp };

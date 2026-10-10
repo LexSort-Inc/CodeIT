@@ -23,7 +23,15 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [root, setRoot] = useState('');
-  const [rightTab, setRightTab] = useState('terminal'); // terminal | tasks | notes | web | images | videos
+  const [rightTab, setRightTab] = useState(() => {
+    try { return localStorage.getItem('codeit.ui.rightTab') || 'terminal'; } catch { return 'terminal'; }
+  }); // terminal | tasks | notes | web | images | videos — persisted, drives backend boot
+  // Persist last tab + boot only its backends (Ollama always; one renderer max).
+  useEffect(() => {
+    try { localStorage.setItem('codeit.ui.rightTab', rightTab); } catch {}
+    window.codeit?.backendsBoot?.(rightTab).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
@@ -229,7 +237,7 @@ export default function App() {
         </section>
         <section className="pane side" aria-label="Terminal, notes, web">
           <div className="pane-title tabs">
-            <Tabs tabs={['terminal', 'tasks', 'notes', 'web', 'images', 'videos']} active={rightTab} onChange={setRightTab}
+            <Tabs tabs={['terminal', 'tasks', 'notes', 'web', 'images', 'videos']} active={rightTab} onChange={(t) => { try { localStorage.setItem('codeit.ui.rightTab', t); } catch {} setRightTab(t); }}
               labels={{ terminal: 'Terminal', tasks: 'Tasks', notes: 'Notes', web: 'Web dock', images: 'Images', videos: 'Videos' }} />
           </div>
           <div className="pane-body">

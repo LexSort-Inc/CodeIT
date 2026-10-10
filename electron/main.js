@@ -92,9 +92,8 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   await createWindow();
-  // App-managed backends: load on start (fire-and-forget; panes poll readiness).
+  // Ollama always (chat backbone); renderers boot lazily per last tab (see backends:boot).
   backends.ensureOllama().catch(() => {});
-  backends.ensureImage().catch(() => {});
 });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -716,3 +715,5 @@ ipcMain.handle('backends:ensure', async () => {
 });
 ipcMain.handle('videos:ensure', async () => backends.ensureVideo());
 ipcMain.handle('images:ensure', async () => backends.ensureImage());
+ipcMain.handle('backends:boot', async (_e, tab) => backends.bootFor(tab));
+ipcMain.handle('backends:switchTo', async (_e, target) => backends.switchTo(target));

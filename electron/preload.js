@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('codeit', {
   imagesSave: (projectPath, name, b64) => ipcRenderer.invoke('images:save', projectPath, name, b64),
   videosSave: (projectPath, name, b64) => ipcRenderer.invoke('videos:save', projectPath, name, b64),
   backendsEnsure: () => ipcRenderer.invoke('backends:ensure'),
+  backendsBoot: (tab) => ipcRenderer.invoke('backends:boot', tab),
+  backendsSwitchTo: (target) => ipcRenderer.invoke('backends:switchTo', target),
   imagesEnsure: () => ipcRenderer.invoke('images:ensure'),
   videosEnsure: () => ipcRenderer.invoke('videos:ensure'),
   execRun: (cmd) => ipcRenderer.invoke('exec:run', cmd),

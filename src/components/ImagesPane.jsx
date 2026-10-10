@@ -114,7 +114,15 @@ export default function ImagesPane({ project }) {
           see <code>servers/sdxl/README.md</code>.
         </div>
       )}
-      {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}</div>}
+      {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}
+        {/switch away|running/.test(err) && (
+          <div style={{ marginTop: 6 }}>
+            <button className="btn btn-sm btn-primary" onClick={async () => { setErr('switching…'); await window.codeit?.backendsSwitchTo?.('images'); setErr(''); ping(); }}>
+              Unload video & start images
+            </button>
+          </div>
+        )}
+      </div>}
       <div className="pad stack">
         <label className="sr-only" htmlFor="codeit-img-prompt">Image prompt</label>
         <textarea id="codeit-img-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}

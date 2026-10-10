@@ -95,7 +95,11 @@ def load_i2v():
         try:
             # Keep everything on MPS (sequential offload breaks text-encoder
             # device placement in the i2v path: "Passed CPU tensor to MPS op").
+            # Exception: VAE stays on CPU — its weights don't reliably follow
+            # .to(device) from single-file loads, and prepare_latents moves
+            # latents onto MPS itself. Slower decode, zero mismatch crashes.
             i2v_pipe.enable_attention_slicing()
+            i2v_pipe.vae.to("cpu")
             i2v_pipe.vae.enable_tiling()
         except Exception:
             pass

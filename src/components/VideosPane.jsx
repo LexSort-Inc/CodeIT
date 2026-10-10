@@ -115,7 +115,15 @@ export default function VideosPane({ project }) {
           see <code>servers/video/README.md</code>.
         </div>
       )}
-      {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}</div>}
+      {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}
+        {/switch away|running/.test(err) && (
+          <div style={{ marginTop: 6 }}>
+            <button className="btn btn-sm btn-primary" onClick={async () => { setErr('switching — unloading the other model first…'); await window.codeit?.backendsSwitchTo?.('video'); setErr(''); ping(); }}>
+              Unload images & start video
+            </button>
+          </div>
+        )}
+      </div>}
       <div className="pad stack">
         <label className="sr-only" htmlFor="codeit-vid-prompt">Video prompt</label>
         <textarea id="codeit-vid-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}
