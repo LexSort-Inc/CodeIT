@@ -152,7 +152,13 @@ export default function VideosPane({ project }) {
           <select aria-label="Video size" value={size.id} onChange={(e) => setSize(SIZES.find((s) => s.id === e.target.value))}>
             {SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
-          <select aria-label="Recipe" value={recipe} onChange={(e) => setRecipe(e.target.value)} title="fast: 0.9.8-distilled, sharp + quick (recommended) · quality: 0.9.5 full weights (slower, static)">
+          <select aria-label="Recipe" value={recipe} onChange={(e) => {
+            const r = e.target.value;
+            setRecipe(r);
+            // Distilled falls apart past ~16 steps; dev needs 40+.
+            // Only snap when the current value looks like the other recipe's default.
+            setSteps((s) => (r === 'fast' ? (s > 16 ? 10 : s) : (s < 20 ? 45 : s)));
+          }} title="fast: 0.9.8-distilled, sharp + quick (recommended) · quality: 0.9.5 full weights (slower, static)">
             <option value="fast">Recipe: fast ✓</option>
             <option value="dev">Recipe: quality</option>
           </select>
