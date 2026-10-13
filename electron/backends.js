@@ -116,12 +116,18 @@ async function bootFor(tab) {
   return { ollama, extra };
 }
 
-// One-click switch: unload the other giant, start this one.
+// One-click switch: unload everything heavy first, then start the target.
+// Video needs ~14GB transient: SDXL + resident Ollama models go first.
+// Images needs less: video goes, Ollama stays for chat.
 async function switchTo(target) {
-  const other = target === 'video' ? 'sdxl' : 'video';
-  stopOne(other);
+  if (target === 'video') {
+    stopOne('sdxl');
+    try { unloadOllamaModel('all'); } catch {}
+  } else {
+    stopOne('video');
+  }
   // Give the OS a breath to reclaim before the next giant loads.
-  await new Promise((r) => setTimeout(r, 3000));
+  await new Promise((r) => setTimeout(r, 5000));
   return target === 'video' ? ensureVideo() : ensureImage();
 }
 

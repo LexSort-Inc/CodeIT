@@ -118,8 +118,8 @@ export default function VideosPane({ project }) {
       {err && <div className="pad" style={{ fontSize: 12, color: 'var(--amber)' }}>{err}
         {/switch away|running/.test(err) && (
           <div style={{ marginTop: 6 }}>
-            <button className="btn btn-sm btn-primary" onClick={async () => { setErr('switching — unloading the other model first…'); await window.codeit?.backendsSwitchTo?.('video'); setErr(''); ping(); }}>
-              Unload images & start video
+            <button className="btn btn-sm btn-primary" onClick={async () => { setErr('switching — unloading images + chat models to free RAM…'); await window.codeit?.backendsSwitchTo?.('video'); setErr(''); ping(); }}>
+              Unload others & start video
             </button>
           </div>
         )}

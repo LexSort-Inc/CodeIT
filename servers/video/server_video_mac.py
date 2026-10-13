@@ -64,46 +64,21 @@ def load_i2v():
     if i2v_pipe is not None:
         return True
     try:
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        ckpt = find_ckpt()
-        i2v_pipe = LTXImageToVideoPipeline.from_single_file(
-            ckpt, torch_dtype=torch.float16,
-            text_encoder=make_text_encoder())
-        try:
-            # No-op when components are device-mapped already.
-            i2v_pipe = i2v_pipe.to(device)
-        except Exception:
-            pass
-        # Belt-and-braces: from_single_file can leave the injected text
-        # encoder behind on CPU -> "Passed CPU tensor to MPS op" at encode.
-        try:
-            if getattr(i2v_pipe, "text_encoder", None) is not None:
-                i2v_pipe.text_encoder = i2v_pipe.text_encoder.to(device)
-        except Exception as e:  # noqa: BLE001
-            print(f"[video-mac] text-encoder move: {str(e)[:200]}", flush=True)
-        try:
-            devs = {}
-            for cname in ("text_encoder", "transformer", "vae"):
-                comp = getattr(i2v_pipe, cname, None)
-                try:
-                    devs[cname] = str(next(comp.parameters()).device)
-                except Exception:
-                    devs[cname] = "?"
-            print(f"[video-mac] i2v devices: {devs}", flush=True)
-        except Exception:
-            pass
-        try:
-            # Keep everything on MPS (sequential offload breaks text-encoder
-            # device placement in the i2v path: "Passed CPU tensor to MPS op").
-            # Exception: VAE stays on CPU — its weights don't reliably follow
-            # .to(device) from single-file loads, and prepare_latents moves
-            # latents onto MPS itself. Slower decode, zero mismatch crashes.
-            i2v_pipe.enable_attention_slicing()
-            i2v_pipe.vae.to("cpu")
-            i2v_pipe.vae.enable_tiling()
-        except Exception:
-            pass
-        print("[video-mac] i2v loaded", flush=True)
+        # Derive from the WORKING text-to-video pipe's components instead of a
+        # second from_single_file load (which stranded transformer/vae on CPU
+        # -> "Passed CPU tensor to MPS op"). Shared weights also halve RAM.
+        load_pipe()
+        if pipe is None:
+            raise RuntimeError(load_error or "t2v pipe not loaded")
+        from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXConditionPipeline
+        i2v_pipe = LTXConditionPipeline(
+            scheduler=pipe.scheduler,
+            vae=pipe.vae,
+            text_encoder=pipe.text_encoder,
+            tokenizer=pipe.tokenizer,
+            transformer=pipe.transformer,
+        )
+        print("[video-mac] i2v ready (shared components)", flush=True)
         return True
     except Exception as e:  # noqa: BLE001
         load_error = str(e)[:500]
@@ -267,9 +242,10 @@ def animate(req: AnimateReq, format: str = "json"):
     seed = req.seed if req.seed >= 0 else int(time.time()) % 2**31
     gen = torch.Generator(device="mps" if torch.backends.mps.is_available() else "cpu").manual_seed(seed)
     t0 = time.time()
+    from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
     with torch.inference_mode():
         out = i2v_pipe(
-            image=src,
+            conditions=[LTXVideoCondition(image=src, frame_index=0)],
             prompt=req.prompt or "gentle motion, slow push-in",
             negative_prompt=req.negative_prompt,
             width=w,
