@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs/promises');
@@ -81,6 +81,20 @@ async function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Native edit menu on right-click (Electron ships none): enables
+  // right-click cut/copy/paste in every prompt box and the editor.
+  mainWindow.webContents.on('context-menu', (_e, params) => {
+    const items = [];
+    if (params.isEditable) {
+      items.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' });
+    } else if (params.selectionText) {
+      items.push({ role: 'copy' });
+    } else {
+      return;
+    }
+    Menu.buildFromTemplate(items).popup({ window: mainWindow });
   });
 
   // restore last active project as workspace root
