@@ -22,7 +22,7 @@ export default function VideosPane({ project }) {
   const [length, setLength] = useState(LENGTHS[1]);
   const [size, setSize] = useState(SIZES[0]);
   const [steps, setSteps] = useState(45);
-  const [recipe, setRecipe] = useState('dev'); // dev (quality) | fast (distilled-style)
+  const [recipe, setRecipe] = useState('fast'); // fast (0.9.8-distilled, default) | dev (0.9.5)
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -128,8 +128,11 @@ export default function VideosPane({ project }) {
         <label className="sr-only" htmlFor="codeit-vid-prompt">Video prompt</label>
         <textarea id="codeit-vid-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); }}
-          placeholder="A neon koi fish swimming through a night canal… (⌘+Enter generates)"
+          placeholder="A red koi fish swims slowly left to right through dark water, fins swaying. Fixed side view, soft moonlight. (⌘+Enter generates)"
           style={{ background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, resize: 'vertical' }} />
+        <div style={{ fontSize: 11, color: 'var(--dim)' }}>
+          Tip: one flowing sentence — subject + motion + camera + light. "Slow push-in", "fixed tripod", "hair swaying" beat single words.
+        </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <select aria-label="Clip length" value={length.id} onChange={(e) => setLength(LENGTHS.find((s) => s.id === e.target.value))}>
             {LENGTHS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -137,9 +140,9 @@ export default function VideosPane({ project }) {
           <select aria-label="Video size" value={size.id} onChange={(e) => setSize(SIZES.find((s) => s.id === e.target.value))}>
             {SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
-          <select aria-label="Recipe" value={recipe} onChange={(e) => setRecipe(e.target.value)} title="dev: full quality (slower) · fast: distilled-style (quicker, softer)">
+          <select aria-label="Recipe" value={recipe} onChange={(e) => setRecipe(e.target.value)} title="fast: 0.9.8-distilled, sharp + quick (recommended) · quality: 0.9.5 full weights (slower, static)">
+            <option value="fast">Recipe: fast ✓</option>
             <option value="dev">Recipe: quality</option>
-            <option value="fast">Recipe: fast</option>
           </select>
           <label style={{ fontSize: 12, color: 'var(--dim)' }}>Steps
             <input type="number" min={5} max={60} value={steps} onChange={(e) => setSteps(+e.target.value || 30)} style={{ width: 56, marginLeft: 4 }} />

@@ -13,6 +13,7 @@ CodeIT app talks to http://127.0.0.1:8003 directly (CORS open for localhost).
 """
 
 import base64
+import gc
 import glob
 import io
 import os
@@ -43,6 +44,7 @@ app.add_middleware(
 )
 
 pipe = None
+pipe_recipe = None
 i2v_pipe = None
 load_error = None
 
@@ -81,26 +83,56 @@ def load_i2v():
         return False
 
 
-def find_ckpt():
-    ckpt = os.path.join(MODEL_DIR, "ltx-video-2b-v0.9.5.safetensors")
-    if not os.path.isfile(ckpt):
-        alt = sorted(glob.glob(os.path.join(MODEL_DIR, "*2b*.safetensors")))
-        if not alt:
-            raise RuntimeError(f"no LTX 2B checkpoint in {MODEL_DIR}")
-        ckpt = alt[0]
-    return ckpt
+CKPTS = {
+    "dev": "ltx-video-2b-v0.9.5.safetensors",       # full dev weights: 40-50 steps, guidance 3-5
+    "fast": "ltxv-2b-0.9.8-distilled.safetensors",  # distilled: 8-12 steps, guidance 1.0
+}
+shared_te = None  # one T5-XXL shared across recipe reloads (9GB, load once)
 
 
-def load_pipe():
-    global pipe, load_error
-    if pipe is not None or load_error is not None:
+def find_ckpt(recipe="dev"):
+    name = CKPTS.get(recipe, CKPTS["dev"])
+    ckpt = os.path.join(MODEL_DIR, name)
+    if os.path.isfile(ckpt):
+        return ckpt
+    alt = sorted(glob.glob(os.path.join(MODEL_DIR, "*2b*.safetensors")))
+    if not alt:
+        raise RuntimeError(f"no LTX 2B checkpoint in {MODEL_DIR}")
+    return alt[0]
+
+
+def get_text_encoder():
+    global shared_te
+    if shared_te is None:
+        shared_te = make_text_encoder()
+    return shared_te
+
+
+def load_pipe(recipe="fast"):
+    global pipe, pipe_recipe, i2v_pipe, load_error
+    recipe = recipe if recipe in CKPTS else "dev"
+    if pipe is not None and pipe_recipe == recipe:
         return
+    if pipe is not None:
+        # Recipe switch: drop the old transformer+VAE (shared T5 stays).
+        print(f"[video-mac] switching recipe {pipe_recipe} -> {recipe}", flush=True)
+        try:
+            del pipe
+        except Exception:
+            pass
+        pipe = None
+        i2v_pipe = None
+        gc.collect()
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass
     try:
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         # Single-file 2B checkpoint (repo has no diffusers folder layout for 2B).
-        ckpt = find_ckpt()
+        ckpt = find_ckpt(recipe)
         pipe = LTXPipeline.from_single_file(ckpt, torch_dtype=torch.float16,
-            text_encoder=make_text_encoder())
+            text_encoder=get_text_encoder())
         try:
             pipe = pipe.to(device)
         except Exception:
@@ -117,7 +149,8 @@ def load_pipe():
             pipe.vae.enable_tiling()
         except Exception:
             pass
-        print(f"[video-mac] loaded on {device} from {MODEL_DIR}", flush=True)
+        print(f"[video-mac] loaded {recipe} on {device} from {MODEL_DIR}", flush=True)
+        pipe_recipe = recipe
     except Exception as e:  # noqa: BLE001 — surfaced via /info
         load_error = str(e)[:500]
         print(f"[video-mac] load failed: {load_error}", flush=True)
@@ -130,9 +163,9 @@ class GenReq(BaseModel):
     height: int = 512
     frames: int = 49
     fps: int = 24
-    steps: int = -1  # -1 = recipe default (dev 45, fast 20)
+    steps: int = -1  # -1 = recipe default (dev 45, fast 10)
     guidance: float = -1.0  # -1 = recipe default (dev 3.5, fast 1.0)
-    recipe: str = "dev"  # dev (0.9.x non-distilled weights) | fast (distilled-style)
+    recipe: str = "fast"  # fast (0.9.8-distilled, default) | dev (0.9.5 full weights)
     seed: int = -1
 
 
@@ -145,6 +178,7 @@ def info():
         "device": "mps" if torch.backends.mps.is_available() else "cpu",
         "dtype": "fp16",
         "ready": pipe is not None,
+        "recipe": pipe_recipe,
         "i2v_ready": i2v_pipe is not None,
         "error": load_error,
     }
@@ -162,7 +196,8 @@ def frames_to_mp4(frames, fps):
 
 @app.post("/generate")
 def generate(req: GenReq, format: str = "json"):
-    load_pipe()
+    recipe = (req.recipe or "dev").lower() if (req.recipe or "dev").lower() in CKPTS else "dev"
+    load_pipe(recipe)
     if pipe is None:
         raise HTTPException(status_code=503, detail=load_error or "model not loaded")
     # LTX likes multiples of 32 spatial, frames = 8k+1.
@@ -170,9 +205,9 @@ def generate(req: GenReq, format: str = "json"):
     h = max(256, min(1024, int(req.height))) // 32 * 32
     frames = min(161, max(9, int(req.frames)))
     frames = (frames - 1) // 8 * 8 + 1
-    dev = (req.recipe or "dev").lower() != "fast"
-    steps = int(req.steps) if int(req.steps) > 0 else (45 if dev else 20)
-    steps = max(5, min(60, steps))
+    dev = recipe != "fast"
+    steps = int(req.steps) if int(req.steps) > 0 else (45 if dev else 10)
+    steps = max(4, min(60, steps))
     guidance = float(req.guidance) if float(req.guidance) > 0 else (3.5 if dev else 1.0)
     seed = req.seed if req.seed >= 0 else int(time.time()) % 2**31
     gen = torch.Generator(device="mps" if torch.backends.mps.is_available() else "cpu").manual_seed(seed)
