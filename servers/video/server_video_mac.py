@@ -17,6 +17,7 @@ import gc
 import glob
 import io
 import os
+import threading
 import time
 
 from fastapi import FastAPI, HTTPException
@@ -47,6 +48,10 @@ pipe = None
 pipe_recipe = None
 i2v_pipe = None
 load_error = None
+# MPS command buffers are not thread-safe: concurrent FastAPI worker threads
+# driving inference abort the process (SIGABRT in AGXG13X command encoder).
+# Serialize ALL pipe calls behind this lock.
+_infer_lock = threading.Lock()
 
 
 def make_text_encoder():
@@ -225,7 +230,7 @@ def generate(req: GenReq, format: str = "json"):
     if dev:
         # 0.9.x dev recipe: proper decode schedule + rescaled guidance.
         call.update(decode_timestep=0.05, decode_noise_scale=0.025, guidance_rescale=0.7)
-    with torch.inference_mode():
+    with _infer_lock, torch.inference_mode():
         out = pipe(**call)
     mp4 = frames_to_mp4(out.frames[0], fps=max(8, min(30, int(req.fps))))
     ms = int((time.time() - t0) * 1000)
@@ -273,7 +278,7 @@ def animate(req: AnimateReq, format: str = "json"):
     gen = torch.Generator(device="mps" if torch.backends.mps.is_available() else "cpu").manual_seed(seed)
     t0 = time.time()
     from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
-    with torch.inference_mode():
+    with _infer_lock, torch.inference_mode():
         out = i2v_pipe(
             conditions=[LTXVideoCondition(image=src, frame_index=0)],
             prompt=req.prompt or "gentle motion, slow push-in",
