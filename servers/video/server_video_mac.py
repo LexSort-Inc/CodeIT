@@ -48,15 +48,10 @@ load_error = None
 
 
 def make_text_encoder():
-    # 9GB T5-XXL on a busy 16GB desktop: stream weights straight onto devices
-    # with disk offload instead of staging it all in RAM at load time.
-    offload = os.path.join(os.path.expanduser("~/PonyServer"), ".t5-offload")
-    os.makedirs(offload, exist_ok=True)
+    # Plain load (proven: succeeded repeatedly). device_map streaming
+    # segfaults on this box. Needs ~10GB transient — ensure headroom first.
     return T5EncoderModel.from_pretrained(
-        MODEL_DIR, subfolder="text_encoder", torch_dtype=torch.float16,
-        device_map="auto", offload_folder=offload,
-        offload_state_dict=True,
-    )
+        MODEL_DIR, subfolder="text_encoder", torch_dtype=torch.float16)
 
 
 def load_i2v():
