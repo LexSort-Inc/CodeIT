@@ -7,6 +7,7 @@ import Settings from './components/Settings.jsx';
 import ProjectsPane from './components/ProjectsPane.jsx';
 import ExtensionsPane from './components/ExtensionsPane.jsx';
 import UsagePane from './components/UsagePane.jsx';
+import SystemPane from './components/SystemPane.jsx';
 import EditorPaneInner from './components/EditorPaneInner.jsx';
 import TasksPane from './components/TasksPane.jsx';
 import ImagesPane from './components/ImagesPane.jsx';
@@ -37,7 +38,7 @@ export default function App() {
   const [git, setGit] = useState({ branch: '', dirty: 0, remote: '', isRepo: false });
   const [notes, setNotes] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage
+  const [railTab, setRailTab] = useState('projects'); // projects | extensions | usage | system
   const [explorerOpen, setExplorerOpen] = useState(false); // file folder view, closed by default
   const [editorOpen, setEditorOpen] = useState(false); // editor, closed by default
   const filesPaneClosed = !explorerOpen && !editorOpen;
@@ -200,7 +201,7 @@ export default function App() {
       <div className={`grid-projects${filesPaneClosed ? ' files-closed' : ''}`}>
         <section className="pane rail" aria-label="Projects and extensions">
           <div className="pane-title tabs">
-            <Tabs tabs={['projects', 'extensions', 'usage']} active={railTab} onChange={setRailTab}
+            <Tabs tabs={['projects', 'extensions', 'usage', 'system']} active={railTab} onChange={setRailTab}
               labels={{ projects: `Projects (${projects.length})`, extensions: 'Extensions', usage: 'Usage' }} />
           </div>
           <div className="pane-body">

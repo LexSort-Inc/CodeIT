@@ -7,6 +7,7 @@ const { exec, execFile } = require('child_process');
 const { CATALOG } = require('./catalog');
 const mcp = require('./mcp');
 const backends = require('./backends');
+const sysinfo = require('./sysinfo');
 
 const isDev = !app.isPackaged;
 let mainWindow;
@@ -717,3 +718,10 @@ ipcMain.handle('videos:ensure', async () => backends.ensureVideo());
 ipcMain.handle('images:ensure', async () => backends.ensureImage());
 ipcMain.handle('backends:boot', async (_e, tab) => backends.bootFor(tab));
 ipcMain.handle('backends:switchTo', async (_e, target) => backends.switchTo(target));
+ipcMain.handle('backends:status', async () => backends.status());
+ipcMain.handle('backends:stopGiant', async (_e, name) => backends.stopGiant(name));
+ipcMain.handle('ollama:unload', async (_e, name) => backends.unloadOllamaModel(name || 'all'));
+// ---------- IPC: system visibility (memory, processes, guarded kill) ----------
+ipcMain.handle('sys:mem', async () => sysinfo.getMemory());
+ipcMain.handle('sys:procs', async () => sysinfo.listProcesses());
+ipcMain.handle('sys:kill', async (_e, pid) => sysinfo.killProcess(pid));

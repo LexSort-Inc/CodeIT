@@ -5,7 +5,16 @@ import { costUSD, fmtCost, fmtTokens } from '../llm/pricing.js';
 export default function StatusBar({ project, git, toolCount, usageTick, zen, setZen, onPalette }) {
   const [totals, setTotals] = useState({ calls: 0, prompt: 0, completion: 0, cost: 0, known: true, localOnly: true });
   const [build, setBuild] = useState(null);
+  const [pressure, setPressure] = useState(null);
   useEffect(() => { window.codeit?.buildInfo?.().then(setBuild).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!window.codeit?.sysMem) return;
+    let alive = true;
+    const poll = () => window.codeit.sysMem().then((m) => { if (alive) setPressure(m.pressure); }).catch(() => {});
+    poll();
+    const t = setInterval(poll, 15000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   useEffect(() => {
     (async () => {
       if (!window.codeit?.usageGet) return;
@@ -29,6 +38,10 @@ export default function StatusBar({ project, git, toolCount, usageTick, zen, set
       <span>{project ? `${project.kind === 'github' ? '⬣' : '📁'} ${project.name}` : 'no project'}</span>
       {git.isRepo && <span>{git.branch || 'detached'}{git.dirty ? ` ●${git.dirty}` : ''}</span>}
       {toolCount > 0 && <span>🧰{toolCount}</span>}
+      {pressure && pressure !== 'unknown' && (
+        <span title={`Memory pressure: ${pressure} — open the System tab for details`}
+          style={{ color: pressure === 'green' ? '#3fb950' : pressure === 'yellow' ? '#d29922' : '#f85149' }}>●</span>
+      )}
       <span className="spacer" />
       {totals.calls > 0 && (
         <span className="cost" title="Session totals across all threads">

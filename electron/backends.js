@@ -159,18 +159,53 @@ async function ensureVideo() {
   return { ok: true, started: true };
 }
 
-function stopBackends() {
-  // Kill our Python servers + ollama serve (only if we started it).
-  for (const name of [...children.keys()]) stopOne(name);
-  // Best-effort: unload resident Ollama models so RAM frees on quit.
-  try {
-    const out = require('child_process').execFileSync('ollama', ['ps'], { timeout: 8000 }).toString();
-    const names = out.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0])
-      .filter((n) => n && n !== 'NAME');
-    for (const n of names.slice(0, 8)) {
-      try { execFileSync('ollama', ['stop', n], { timeout: 30000 }); } catch {}
-    }
-  } catch {}
+function childRunning(name) {
+  const c = children.get(name);
+  return Boolean(c && !c.killed && c.exitCode == null);
 }
 
-module.exports = { ensureOllama, ensureImage, ensureVideo, bootFor, switchTo, stopBackends, portUp };
+// Status snapshot for the System tab (never starts anything).
+async function status() {
+  const [sdxlUp, videoUp] = await Promise.all([portUp(8002, 1500), portUp(8003, 1500)]);
+  let ollamaModels = [];
+  try {
+    const out = require('child_process').execFileSync('ollama', ['ps'], { timeout: 8000 }).toString();
+    ollamaModels = out.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0])
+      .filter((n) => n && n !== 'NAME');
+  } catch {}
+  return {
+    sdxl: { running: childRunning('sdxl') || sdxlUp, portUp: sdxlUp },
+    video: { running: childRunning('video') || videoUp, portUp: videoUp },
+    ollamaModels,
+  };
+}
+
+function stopGiant(name) {
+  if (name !== 'sdxl' && name !== 'video') return { ok: false, error: 'unknown backend' };
+  stopOne(name);
+  return { ok: true };
+}
+
+function unloadOllamaModel(name) {
+  try {
+    const { execFileSync } = require('child_process');
+    if (name === 'all') {
+      const out = execFileSync('ollama', ['ps'], { timeout: 8000 }).toString();
+      const names = out.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0])
+        .filter((n) => n && n !== 'NAME').slice(0, 8);
+      for (const n of names) { try { execFileSync('ollama', ['stop', n], { timeout: 30000 }); } catch {} }
+      return { ok: true, unloaded: names };
+    }
+    execFileSync('ollama', ['stop', String(name)], { timeout: 30000 });
+    return { ok: true, unloaded: [name] };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err).slice(0, 200) };
+  }
+}
+function stopBackends() {
+  // Kill our Python servers + unload Ollama models so RAM frees on quit.
+  for (const name of [...children.keys()]) stopOne(name);
+  try { unloadOllamaModel('all'); } catch {}
+}
+
+module.exports = { ensureOllama, ensureImage, ensureVideo, bootFor, switchTo, stopBackends, stopGiant, status, unloadOllamaModel, portUp };
