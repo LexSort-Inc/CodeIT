@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Empty } from './ui.jsx';
+import PromptBuilder from './PromptBuilder.jsx';
 
 // Local image generation via the CodeIT SDXL quality server (Mac: Pony V6 XL, MPS fp16).
 // Server: servers/sdxl/server_sdxl_mac.py on http://127.0.0.1:8002 (/info + /generate).
@@ -19,6 +20,7 @@ export default function ImagesPane({ project }) {
   const [steps, setSteps] = useState(28);
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(false);
   const [elapsed, setElapsed] = useState(0); // seconds since generate started
   const timer = useRef(null);
   const [gallery, setGallery] = useState([]); // [{src, seed, ms, prompt}]
@@ -124,6 +126,15 @@ export default function ImagesPane({ project }) {
         )}
       </div>}
       <div className="pad stack">
+        <div className="row">
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-sm btn-ghost" onClick={() => setShowBuilder(!showBuilder)} aria-expanded={showBuilder}>
+            {showBuilder ? 'Hide prompt builder' : '🛠 Prompt builder'}
+          </button>
+        </div>
+        {showBuilder && (
+          <PromptBuilder mode="image" initial={prompt} onUse={({ prompt: p }) => { setPrompt(p); setShowBuilder(false); }} />
+        )}
         <label className="sr-only" htmlFor="codeit-img-prompt">Image prompt</label>
         <textarea id="codeit-img-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); }}

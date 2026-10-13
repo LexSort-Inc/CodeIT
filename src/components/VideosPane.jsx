@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Empty } from './ui.jsx';
+import PromptBuilder from './PromptBuilder.jsx';
 
 // Local video generation via the CodeIT video server (Mac: LTX-Video 2B, MPS fp16).
 // Server: servers/video/server_video_mac.py on http://127.0.0.1:8003 (/info + /generate).
@@ -26,6 +27,8 @@ export default function VideosPane({ project }) {
   const [seed, setSeed] = useState(-1);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [negative, setNegative] = useState('');
+  const [showBuilder, setShowBuilder] = useState(false);
   const [clips, setClips] = useState([]); // [{src, seed, ms, prompt, b64, fps}]
   const [err, setErr] = useState('');
   const timer = useRef(null);
@@ -77,7 +80,7 @@ export default function VideosPane({ project }) {
       const r = await fetch(`${HOST}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), width: size.w, height: size.h, frames: length.frames, steps, recipe, seed }),
+        body: JSON.stringify({ prompt: prompt.trim(), negative_prompt: negative || undefined, width: size.w, height: size.h, frames: length.frames, steps, recipe, seed }),
       });
       if (!r.ok) throw new Error(`server ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const j = await r.json();
@@ -125,6 +128,15 @@ export default function VideosPane({ project }) {
         )}
       </div>}
       <div className="pad stack">
+        <div className="row">
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-sm btn-ghost" onClick={() => setShowBuilder(!showBuilder)} aria-expanded={showBuilder}>
+            {showBuilder ? 'Hide prompt builder' : '🛠 Prompt builder'}
+          </button>
+        </div>
+        {showBuilder && (
+          <PromptBuilder mode="video" initial={prompt} onUse={({ prompt: p, negative: n }) => { setPrompt(p); setNegative(n); setShowBuilder(false); }} />
+        )}
         <label className="sr-only" htmlFor="codeit-vid-prompt">Video prompt</label>
         <textarea id="codeit-vid-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); }}
