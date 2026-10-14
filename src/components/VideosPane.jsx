@@ -31,6 +31,10 @@ export default function VideosPane({ project }) {
   const [showBuilder, setShowBuilder] = useState(false);
   const [clips, setClips] = useState([]); // [{src, seed, ms, prompt, b64, fps}]
   const [err, setErr] = useState('');
+  const [mode, setMode] = useState('text'); // text | animate
+  const [srcName, setSrcName] = useState('');
+  const [srcB64, setSrcB64] = useState('');
+  const srcRef = useRef(null);
   const timer = useRef(null);
 
   async function ping() {
@@ -68,8 +72,21 @@ export default function VideosPane({ project }) {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  function pickSource(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const dataUrl = String(rd.result || '');
+      setSrcB64(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl);
+      setSrcName(f.name);
+    };
+    rd.readAsDataURL(f);
+  }
+
   async function generate() {
-    if (!prompt.trim() || busy) return;
+    if ((!prompt.trim() && mode === 'text') || busy) return;
+    if (mode === 'animate' && !srcB64) { setErr('Pick a source image first (PNG/JPG).'); return; }
     setBusy(true);
     setErr('');
     const t0 = Date.now();
@@ -77,10 +94,13 @@ export default function VideosPane({ project }) {
     clearInterval(timer.current);
     timer.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500);
     try {
-      const r = await fetch(`${HOST}/generate`, {
+      const isAnim = mode === 'animate';
+      const r = await fetch(`${HOST}${isAnim ? '/animate' : '/generate'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), negative_prompt: negative || undefined, width: size.w, height: size.h, frames: length.frames, steps, recipe, seed }),
+        body: JSON.stringify(isAnim
+          ? { image_b64: srcB64, prompt: prompt.trim(), width: size.w, height: size.h, frames: length.frames, steps, guidance: 3.0, seed }
+          : { prompt: prompt.trim(), negative_prompt: negative || undefined, width: size.w, height: size.h, frames: length.frames, steps, recipe, seed }),
       });
       if (!r.ok) throw new Error(`server ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const j = await r.json();
@@ -129,18 +149,30 @@ export default function VideosPane({ project }) {
       </div>}
       <div className="pad stack">
         <div className="row">
+          <div className="tabs" role="tablist" aria-label="Video mode">
+            <button role="tab" aria-selected={mode === 'text'} className={mode === 'text' ? 'active' : ''} onClick={() => setMode('text')}>Text→video</button>
+            <button role="tab" aria-selected={mode === 'animate'} className={mode === 'animate' ? 'active' : ''} onClick={() => setMode('animate')}>Animate image</button>
+          </div>
           <span style={{ flex: 1 }} />
           <button className="btn btn-sm btn-ghost" onClick={() => setShowBuilder(!showBuilder)} aria-expanded={showBuilder}>
             {showBuilder ? 'Hide prompt builder' : '🛠 Prompt builder'}
           </button>
         </div>
+        {mode === 'animate' && (
+          <div className="row">
+            <input ref={srcRef} type="file" accept="image/png,image/jpeg" onChange={pickSource} aria-label="Source image to animate" />
+            {srcName && <span style={{ fontSize: 11, color: 'var(--dim)' }}>{srcName} — best: a Pony still at matching size</span>}
+          </div>
+        )}
         {showBuilder && (
           <PromptBuilder mode="video" initial={prompt} onUse={({ prompt: p, negative: n }) => { setPrompt(p); setNegative(n); setShowBuilder(false); }} />
         )}
         <label className="sr-only" htmlFor="codeit-vid-prompt">Video prompt</label>
         <textarea id="codeit-vid-prompt" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); }}
-          placeholder="A red koi fish swims slowly left to right through dark water, fins swaying. Fixed side view, soft moonlight. (⌘+Enter generates)"
+          placeholder={mode === 'animate'
+            ? 'Motion only — the image carries the look (e.g. hair swaying gently, slow push-in)…'
+            : 'A red koi fish swims slowly left to right through dark water, fins swaying. Fixed side view, soft moonlight. (⌘+Enter generates)'}
           style={{ background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, resize: 'vertical' }} />
         <div style={{ fontSize: 11, color: 'var(--dim)' }}>
           Tip: one flowing sentence — subject + motion + camera + light. "Slow push-in", "fixed tripod", "hair swaying" beat single words.
