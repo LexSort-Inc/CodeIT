@@ -13,6 +13,17 @@ const isDev = !app.isPackaged;
 let mainWindow;
 let workspaceRoot = os.homedir();
 
+// Last resort: log main-process crashes to a file instead of Electron's
+// scary dialog. Individual handlers should still catch their own errors.
+process.on('uncaughtException', (err) => {
+  try {
+    const dir = path.join(app.getPath('userData'), 'CodeIT');
+    fsSync.mkdirSync(dir, { recursive: true });
+    fsSync.appendFileSync(path.join(dir, 'main-errors.log'),
+      `${new Date().toISOString()} UNCAUGHT: ${String(err && err.stack || err).slice(0, 2000)}\n`);
+  } catch {}
+});
+
 // ---------- Projects store (organized multi-project workflow) ----------
 // projects.json in userData: { activeId, projects: [{id,name,kind,path,repo,url,branch,pinned,createdAt,lastOpened}] }
 // Per-project chat history: userData/chats/<id>.json

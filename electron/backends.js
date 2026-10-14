@@ -15,6 +15,25 @@ const { spawn, execFileSync } = require('child_process');
 const children = new Map(); // name -> ChildProcess
 const HOME = os.homedir();
 
+// GUI apps get a minimal PATH (/usr/bin:/bin/…) — Homebrew and friends are
+// invisible, so `spawn 'ollama'` dies with ENOENT. Resolve absolute paths.
+const BIN_CANDIDATES = {
+  ollama: [
+    '/opt/homebrew/bin/ollama',
+    '/usr/local/bin/ollama',
+    '/Applications/Ollama.app/Contents/Resources/ollama',
+  ],
+};
+function resolveBin(name) {
+  for (const p of BIN_CANDIDATES[name] || []) {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch {}
+  }
+  return name; // last resort: PATH lookup (works in dev terminals)
+}
+
 function logPath(name) {
   const dir = path.join(HOME, 'PonyServer');
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
@@ -43,6 +62,9 @@ function spawnLogged(name, cmd, args, env) {
     stdio: ['ignore', out, out],
     windowsHide: true,
   });
+  // Never let a spawn failure become an uncaught main-process exception
+  // (Electron turns those into a scary dialog). Record and drop instead.
+  child.on('error', () => { if (children.get(name) === child) children.delete(name); });
   child.on('exit', () => { if (children.get(name) === child) children.delete(name); });
   children.set(name, child);
   return child;
@@ -77,7 +99,7 @@ async function ensureOllama() {
   if (await portUp(11434)) return { ok: true, started: false };
   if (process.platform === 'win32') return { ok: false, error: 'ollama not running (ThinkCenter owns startup)' };
   try {
-    spawnLogged('ollama', 'ollama', ['serve'], {});
+    spawnLogged('ollama', resolveBin('ollama'), ['serve'], {});
     for (let i = 0; i < 15; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       if (await portUp(11434)) return { ok: true, started: true };
@@ -175,7 +197,7 @@ async function status() {
   const [sdxlUp, videoUp] = await Promise.all([portUp(8002, 1500), portUp(8003, 1500)]);
   let ollamaModels = [];
   try {
-    const out = require('child_process').execFileSync('ollama', ['ps'], { timeout: 8000 }).toString();
+    const out = require('child_process').execFileSync(resolveBin('ollama'), ['ps'], { timeout: 8000 }).toString();
     ollamaModels = out.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0])
       .filter((n) => n && n !== 'NAME');
   } catch {}
@@ -196,13 +218,13 @@ function unloadOllamaModel(name) {
   try {
     const { execFileSync } = require('child_process');
     if (name === 'all') {
-      const out = execFileSync('ollama', ['ps'], { timeout: 8000 }).toString();
+      const out = execFileSync(resolveBin('ollama'), ['ps'], { timeout: 8000 }).toString();
       const names = out.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0])
         .filter((n) => n && n !== 'NAME').slice(0, 8);
-      for (const n of names) { try { execFileSync('ollama', ['stop', n], { timeout: 30000 }); } catch {} }
+      for (const n of names) { try { execFileSync(resolveBin('ollama'), ['stop', n], { timeout: 30000 }); } catch {} }
       return { ok: true, unloaded: names };
     }
-    execFileSync('ollama', ['stop', String(name)], { timeout: 30000 });
+    execFileSync(resolveBin('ollama'), ['stop', String(name)], { timeout: 30000 });
     return { ok: true, unloaded: [name] };
   } catch (err) {
     return { ok: false, error: String(err.message || err).slice(0, 200) };
