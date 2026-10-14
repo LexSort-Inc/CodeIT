@@ -209,7 +209,9 @@ export default function App() {
               ? <ProjectsPane activeId={activeId} onSelect={selectProject} refreshKey={refreshKey} />
               : railTab === 'extensions'
                 ? <ExtensionsPane project={active} />
-                : <UsagePane refreshKey={refreshKey} />}
+                : railTab === 'system'
+                  ? <SystemPane />
+                  : <UsagePane refreshKey={refreshKey} />}
           </div>
         </section>
         <section className="pane" aria-label="Chat">
