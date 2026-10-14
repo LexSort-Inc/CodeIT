@@ -68,11 +68,12 @@ select, input[type="text"], input:not([type]), input[type="password"], input[typ
 textarea { font-family: var(--font); }
 
 /* ---------- tabs: one style ---------- */
-.tabs { display: flex; gap: 4px; padding: 6px; align-items: center; }
-.tabs .btn, .tabs button { background: transparent; border: 1px solid transparent; color: var(--dim); border-radius: 20px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.tabs { display: flex; gap: 4px; padding: 6px; align-items: center; flex-wrap: wrap; row-gap: 4px; }
+.tabs .btn, .tabs button { background: transparent; border: 1px solid transparent; color: var(--dim); border-radius: 20px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .tabs button:hover { color: var(--text); background: var(--bg2); }
 .tabs button.active { background: var(--accent-dim); color: var(--text); border-color: var(--accent); font-weight: 600; }
 .pane-title.tabs { text-transform: none; letter-spacing: 0; }
+.pane.rail .tabs button { padding: 4px 8px; font-size: 11px; }
 
 /* ---------- toolbar rows ---------- */
 .toolbar { display: flex; gap: 6px; padding: 6px var(--s2); border-bottom: 1px solid var(--line); align-items: center; min-height: 38px; }

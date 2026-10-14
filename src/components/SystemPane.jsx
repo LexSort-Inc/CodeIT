@@ -89,10 +89,10 @@ export default function SystemPane() {
               action={backends.ollamaModels?.length ? { label: 'Unload all', fn: () => window.codeit.ollamaUnload('all') } : null}
               busy={busy} act={act} />
             <BackendRow label="Image server (:8002)" detail={backends.sdxl?.portUp ? 'running' : 'stopped'}
-              action={backends.sdxl?.running ? { label: 'Stop', fn: () => window.codeit.backendsStopGiant('sdxl') } : null}
+              action={(backends.sdxl?.running || backends.sdxl?.portUp) ? { label: 'Stop', fn: () => window.codeit.backendsStopGiant('sdxl') } : null}
               busy={busy} act={act} />
             <BackendRow label="Video server (:8003)" detail={backends.video?.portUp ? 'running' : 'stopped'}
-              action={backends.video?.running ? { label: 'Stop', fn: () => window.codeit.backendsStopGiant('video') } : null}
+              action={(backends.video?.running || backends.video?.portUp) ? { label: 'Stop', fn: () => window.codeit.backendsStopGiant('video') } : null}
               busy={busy} act={act} />
           </div>
         </section>
