@@ -202,7 +202,7 @@ export default function App() {
         <section className="pane rail" aria-label="Projects and extensions">
           <div className="pane-title tabs">
             <Tabs tabs={['projects', 'extensions', 'usage', 'system']} active={railTab} onChange={setRailTab}
-              labels={{ projects: `Projects (${projects.length})`, extensions: 'Extensions', usage: 'Usage' }} />
+              labels={{ projects: `Projects (${projects.length})`, extensions: 'Extensions', usage: 'Usage', system: 'System' }} />
           </div>
           <div className="pane-body">
             {railTab === 'projects'
