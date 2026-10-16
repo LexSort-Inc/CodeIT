@@ -186,7 +186,26 @@ def info():
         "recipe": pipe_recipe,
         "i2v_ready": i2v_pipe is not None,
         "error": load_error,
+        # Engine registry: today LTX only; Wan 1.3B / CogVideoX-5B plug in here.
+        "models": [
+            {"id": "ltx-2b", "label": "LTX-Video 2B", "best_for": "Fast local clips",
+             "available": True, "active": True},
+        ],
     }
+
+
+class ModelReq(BaseModel):
+    id: str
+
+
+@app.post("/model")
+def switch_model(req: ModelReq):
+    # Single engine today; accept ltx-2b as no-op so clients can code
+    # against the contract now. Future engines unload + lazy-load here.
+    if req.id != "ltx-2b":
+        raise HTTPException(status_code=404, detail=f"unknown model {req.id} (only ltx-2b installed)")
+    load_pipe()
+    return {"ok": True, "active": "ltx-2b"}
 
 
 def frames_to_mp4(frames, fps):

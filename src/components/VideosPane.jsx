@@ -178,6 +178,24 @@ export default function VideosPane({ project }) {
           Tip: one flowing sentence — subject + motion + camera + light. "Slow push-in", "fixed tripod", "hair swaying" beat single words.
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
+          {(info?.models || []).length > 1 && (
+            <select aria-label="Video engine"
+              value={(info.models.find((m) => m.active) || {}).id || ''}
+              title={(info.models.find((m) => m.active) || {}).best_for || ''}
+              onChange={async (e) => {
+                try {
+                  await fetch(`${HOST}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: e.target.value }) });
+                  setReady(false);
+                  ping();
+                } catch (er) { setErr(String(er.message || er).slice(0, 200)); }
+              }}>
+              {info.models.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}{m.available ? '' : ' (not downloaded)'}
+                </option>
+              ))}
+            </select>
+          )}
           <select aria-label="Clip length" value={length.id} onChange={(e) => setLength(LENGTHS.find((s) => s.id === e.target.value))}>
             {LENGTHS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>

@@ -25,13 +25,25 @@ export default function ImagesPane({ project }) {
   const timer = useRef(null);
   const [gallery, setGallery] = useState([]); // [{src, seed, ms, prompt}]
   const [err, setErr] = useState('');
+  const [models, setModels] = useState([]);
+  const [modelId, setModelId] = useState('');
+  const [switching, setSwitching] = useState(false);
+
+  function applyInfo(j) {
+    setInfo(j);
+    setReady(!!j.ready);
+    if (Array.isArray(j.models) && j.models.length) {
+      setModels(j.models);
+      const active = j.models.find((m) => m.active) || j.models.find((m) => m.available) || j.models[0];
+      if (active) setModelId((cur) => cur || active.id);
+    }
+  }
 
   async function ping() {
     try {
       const r = await fetch(`${HOST}/info`);
       const j = await r.json();
-      setInfo(j);
-      setReady(!!j.ready);
+      applyInfo(j);
       if (!j.ready) setErr(j.error || 'model not loaded — check server log');
       else setErr('');
     } catch {
@@ -51,11 +63,38 @@ export default function ImagesPane({ project }) {
       try {
         const r = await fetch(`${HOST}/info`);
         const j = await r.json();
-        if (j.ready) { setInfo(j); setReady(true); setErr(''); clearInterval(t); }
+        if (j.ready) { applyInfo(j); setReady(true); setErr(''); clearInterval(t); }
       } catch {}
     }, 5000);
     return () => clearInterval(t);
   }, []);
+
+  async function switchModel(id) {
+    if (!id || id === modelId || switching) return;
+    setSwitching(true);
+    setErr('');
+    try {
+      const r = await fetch(`${HOST}/model`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      setModelId(id);
+      setReady(false); // reload takes minutes; poller below picks up readiness
+      const t = setInterval(async () => {
+        try {
+          const jr = await (await fetch(`${HOST}/info`)).json();
+          applyInfo(jr);
+          if (jr.ready && (jr.models || []).some((m) => m.active && m.id === id)) {
+            setReady(true); setErr(''); clearInterval(t);
+          }
+        } catch {}
+      }, 5000);
+    } catch (e) {
+      setErr(`model switch failed: ${String(e.message || e).slice(0, 200)}`);
+    }
+    setSwitching(false);
+  }
 
   async function generate() {
     if (!prompt.trim() || busy) return;
@@ -69,7 +108,7 @@ export default function ImagesPane({ project }) {
       const r = await fetch(`${HOST}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), width: size.w, height: size.h, steps, seed }),
+        body: JSON.stringify({ prompt: prompt.trim(), width: size.w, height: size.h, steps, seed, model: modelId || undefined }),
       });
       if (!r.ok) throw new Error(`server ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const j = await r.json();
@@ -141,6 +180,17 @@ export default function ImagesPane({ project }) {
           placeholder="A workspace desk at night, neon, pony score style… (⌘+Enter generates)"
           style={{ background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, resize: 'vertical' }} />
         <div className="row" style={{ flexWrap: 'wrap' }}>
+          {models.length > 1 && (
+            <select aria-label="Image model" value={modelId} disabled={switching || busy}
+              title={models.find((m) => m.id === modelId)?.best_for || ''}
+              onChange={(e) => switchModel(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}{m.available ? '' : ' (not downloaded)'}
+                </option>
+              ))}
+            </select>
+          )}
           <select aria-label="Image size" value={size.id} onChange={(e) => setSize(SIZES.find((s) => s.id === e.target.value))}>
             {SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
